@@ -1,0 +1,72 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+# ----------------------------------------
+# Environment files (anywhere)
+# ----------------------------------------
+.env
+.env.*
+.env.local
+!.env.example
+!.env.sample
+!.env.template
+
+# ----------------------------------------
+# Python bytecode / cache (anywhere)
+# ----------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ----------------------------------------
+# Virtual environments (anywhere)
+# ----------------------------------------
+venv/
+.venv/
+env/
+.envdir/
+.python-version
+
+# Common nested venv patterns
+**/venv/
+**/.venv/
+**/env/
+
+# ----------------------------------------
+# Python build / tooling
+# ----------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+dist/
+build/
+*.egg-info/
+pip-wheel-metadata/
+
+# ----------------------------------------
+# Logs & temp files
+# ----------------------------------------
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+
+# ----------------------------------------
+# Local dev databases
+# ----------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+
+# ----------------------------------------
+# IDEs
+# ----------------------------------------
+.vscode/
+.idea/
