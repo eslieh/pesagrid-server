@@ -46,15 +46,10 @@ app.add_middleware(
 
 
 # # Include routers
-# from app.api.v1.routers import auth_router, permission_router, role_router, user_router, auto_onboarding_router
+from app.modules.auth.routers import auth_router
 # from app.api.v1.internal import internal_router
 
-# app.include_router(auth_router.router_auth, prefix="/api/v1", tags=["Authentication"])
-# app.include_router(permission_router.router_perm, prefix="/api/v1/permissions", tags=["Permission"])
-# app.include_router(role_router.router_role, prefix="/api/v1/roles", tags=["Role"])
-# app.include_router(user_router.router_user, prefix="/api/v1/users", tags=["User"])
-# app.include_router(internal_router.router_internal, prefix="/api/v1", tags=["Internal"])
-# app.include_router(auto_onboarding_router.router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
 
 @app.get("/health")
 async def health_check():
