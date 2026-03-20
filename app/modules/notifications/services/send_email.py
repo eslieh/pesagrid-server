@@ -21,12 +21,12 @@ def _send_sync(
 ) -> dict:
     """Synchronous Resend send — runs in a thread pool from the async caller."""
     resend.api_key = settings.RESEND_API_KEY
-    params = resend.Emails.SendParams(
-        from_=from_email or settings.RESEND_FROM_EMAIL,
-        to=[to],
-        subject=subject,
-        html=html_body,
-    )
+    params = {
+        "from": from_email or settings.RESEND_FROM_EMAIL,
+        "to": [to],
+        "subject": subject,
+        "html": html_body,
+    }
     return resend.Emails.send(params)
 
 

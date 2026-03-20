@@ -18,6 +18,40 @@ class PSPType(str, Enum):
     CUSTOM     = "custom"
 
 
+class BusinessProfile(Base):
+    """
+    A tenant's identity record on the platform.
+
+    One profile per collection (business workspace). Stores:
+      - Business name and display name (used as SMS sender / email from)
+      - Contact info (so the business can be reached as the platform operator)
+      - Notification sender settings that override the platform defaults
+      - meta JSONB for any extra fields (KRA PIN, registration number, etc.)
+
+    This mirrors how PSP providers know the business — the display_name and
+    sms_sender_id appear on every message sent to their customers.
+    """
+    __tablename__ = "business_profiles"
+
+    id              = Column(UUID, primary_key=True, default=uuid4)
+    collection_id   = Column(UUID, nullable=False, unique=True, index=True)  # one per workspace
+    business_name   = Column(Text, nullable=False)           # legal/registered name
+    display_name    = Column(Text, nullable=True)            # short brand name shown to customers
+    phone           = Column(Text, nullable=True)            # owner contact phone
+    email           = Column(Text, nullable=True)            # owner contact email
+    address         = Column(Text, nullable=True)
+    logo_url        = Column(Text, nullable=True)
+    # Notification sender overrides (email only — SMS sender ID is platform-wide)
+    email_from      = Column(Text, nullable=True)            # e.g. "billing@myschool.ac.ke"
+    # Any extras: KRA PIN, registration no, county, business type, etc.
+    meta            = Column(JSONB, nullable=True, default=dict)
+    created_by      = Column(UUID, nullable=False)
+    created_at      = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = ({"schema": "accounts"},)
+
+
 class PSPConfig(Base):
     """
     A business's configured payment service provider (payment channel).

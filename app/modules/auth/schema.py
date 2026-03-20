@@ -1,10 +1,11 @@
 from enum import Enum
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List
 from datetime import date, datetime
 import uuid
 
 from .models import UserResponse
+from app.core.phone_utils import normalise_phone, InvalidPhoneNumberError
 
 # Registration & Login
 class RegisterRequest(BaseModel):
@@ -13,16 +14,32 @@ class RegisterRequest(BaseModel):
     phone: Optional[str] = None
     password: str = Field(..., min_length=8, max_length=100)
     auth_type: str
-    
-    # @validator('email')
-    # def email_lowercase(cls, v):
-    #     return v.lower()
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def validate_phone(cls, v):
+        if not v:
+            return v
+        try:
+            return normalise_phone(str(v))
+        except InvalidPhoneNumberError as e:
+            raise ValueError(str(e))
 
 class UserSetupRequest(BaseModel):
     email: EmailStr
     username: Optional[str] = None
     phone: Optional[str] = None
     auth_type: str = "email"
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def validate_phone(cls, v):
+        if not v:
+            return v
+        try:
+            return normalise_phone(str(v))
+        except InvalidPhoneNumberError as e:
+            raise ValueError(str(e))
 
 class LoginRequest(BaseModel):
     identifier: str = Field(..., description="Email, phone or username")

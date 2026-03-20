@@ -1,67 +1,37 @@
 import asyncio
 import requests
-import os
 import logging
+
+from app.core.phone_utils import normalise_for_sms, InvalidPhoneNumberError
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class SendSms:
-    def __init__(self, phone, message):
-        # Normalize the phone number
-        self.phone = self.format_phone_number(phone)
+    def __init__(self, phone: str, message: str, default_country: str = "KE"):
+        self.raw_phone = phone
+        self.phone = normalise_for_sms(phone, default_country=default_country)
         self.message = message
 
-    def format_phone_number(self, phone):
-        # Ensure phone is a string
-        phone = str(phone).strip()
-
-        # If phone starts with '0', remove the '0' and prepend '254'
-        if phone.startswith('0'):
-            formatted_phone = f'254{phone[1:]}'
-        # If phone starts with '+254', remove the '+' and leave the rest
-        elif phone.startswith('+254'):
-            formatted_phone = f'254{phone[4:]}'
-        # If phone starts with '254', leave it as is
-        elif phone.startswith('254'):
-            formatted_phone = phone
-        # Handle local numbers starting with '7' or '01'
-        elif phone.startswith('7') and len(phone) == 9:  # local number like 712345678
-            formatted_phone = f'254{phone}'
-        elif phone.startswith('1') and len(phone) == 9:  # local number like 0123456789
-            formatted_phone = f'254{phone}'
-        else:
-            raise ValueError("Invalid phone number format. Ensure it's either +254, 254, or starts with 0.")
-
-        return formatted_phone
-
-    def post(self):
-        # Remove leading zero(s) from phone number
-        formatted_phone = self.phone
-        full_phone = formatted_phone
-
-        # URL for SMS portal
+    def post(self) -> dict:
         url = "https://smsportal.hostpinnacle.co.ke/SMSApi/send"
-
-        # Prepare payload
         payload = {
-            'userid': os.getenv("SMS_USER_ID"),
-            'password': os.getenv("SMS_PASSWORD"),
-            'mobile': full_phone,
-            'msg': self.message,
-            'senderid': 'Intacom',
-            'msgType': 'text',
-            'duplicatecheck': 'true',
-            'output': 'json',
-            'sendMethod': 'quick'
+            "userid":          settings.SMS_USER_ID,
+            "password":        settings.SMS_PASSWORD,
+            "mobile":          self.phone,
+            "msg":             self.message,
+            "senderid":        settings.SMS_SENDER_ID,
+            "msgType":         "text",
+            "duplicatecheck":  "true",
+            "output":          "json",
+            "sendMethod":      "quick",
         }
-
-        # Headers
         headers = {
-            'apikey': os.getenv("SMS_API_KEY"),
-            'cache-control': 'no-cache',
-            'content-type': 'application/x-www-form-urlencoded'
+            "apikey":        settings.SMS_API_KEY,
+            "cache-control": "no-cache",
+            "content-type":  "application/x-www-form-urlencoded",
         }
-
         try:
             response = requests.post(url, data=payload, headers=headers, timeout=10)
             response.raise_for_status()
@@ -69,18 +39,28 @@ class SendSms:
             return {"success": True}
         except requests.HTTPError as http_err:
             logger.error(f"SMS HTTP error to {self.phone}: {http_err}")
-            return {"error": f"HTTP error occurred: {http_err}"}
+            return {"error": f"HTTP error: {http_err}"}
         except requests.RequestException as e:
             logger.error(f"SMS request failed to {self.phone}: {e}")
             return {"error": str(e)}
 
 
-async def send_sms(phone: str, message: str) -> dict:
+async def send_sms(phone: str, message: str, default_country: str = "KE") -> dict:
     """
-    Async wrapper — runs the blocking HTTP call in a thread pool.
-    Safe to await from the async worker / dispatcher.
+    Async wrapper — parses + normalises the number internationally,
+    then runs the blocking HTTP call in a thread pool.
+
+    Args:
+        phone:           Raw phone string in any common format.
+        message:         SMS body text.
+        default_country: ISO 3166-1 alpha-2 hint used when no country code
+                         is present (e.g. '0712...' → KE → '+254712...').
+                         Defaults to 'KE'.
+
+    Raises:
+        InvalidPhoneNumberError: If the number is unparseable or invalid.
     """
     def _send():
-        return SendSms(phone, message).post()
+        return SendSms(phone, message, default_country=default_country).post()
 
     return await asyncio.to_thread(_send)

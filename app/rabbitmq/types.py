@@ -23,6 +23,7 @@ class EventType(str, Enum):
     # Auth
     AUTH_WELCOME        = "auth.welcome"
     AUTH_PASSWORD_RESET = "auth.password_reset"
+    USER_VERIFIED       = "auth.user_verified"
 
 class Priority(int, Enum):
     LOW = 0

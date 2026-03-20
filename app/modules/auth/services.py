@@ -8,7 +8,7 @@ from typing import Optional, Tuple, List
 import secrets
 import hashlib
 import time
-import os 
+import os
 from dotenv import load_dotenv
 load_dotenv()
 import logging
@@ -23,9 +23,11 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_password_hash as generate_hash # reuse if needed
+    get_password_hash as generate_hash
 )
+from app.core.config import settings
 from app.rabbitmq import BasePublisher, EventType, Priority
+from app.modules.notifications.services.dispatcher import _build_from_email
 
 class AuthService:
     def __init__(self, db: Session):
@@ -73,20 +75,24 @@ class AuthService:
     
     async def register_user(self, data: RegisterRequest) -> Tuple[User, str]:
         """Register a new user and generate verification token"""
-        # Check existing user
-        filters = [User.email == data.email]
+        # Check existing user — only filter by fields that are actually provided
+        filters = []
+        if data.email:
+            filters.append(User.email == data.email)
         if data.phone:
             filters.append(User.phone == data.phone)
         if data.username:
             filters.append(User.username == data.username)
-        
-        existing = self.db.query(User).filter(
-            sqlalchemy.or_(*filters)
-        ).first()
+
+        existing = None
+        if filters:
+            existing = self.db.query(User).filter(
+                sqlalchemy.or_(*filters)
+            ).first()
         
         if existing:
             # If user exists with this email but is NOT verified, resend verification
-            if existing.email == data.email:
+            if existing.email == data.email or existing.phone == data.phone or existing.username == data.username:
                 if not existing.verified:
                     # Delete old tokens for this user
                     self.db.query(AuthToken).filter(AuthToken.user_id == existing.id).delete()
@@ -96,35 +102,19 @@ class AuthService:
                     token = self._generate_verification_token(existing.id)
                     self.db.commit()
                     self.db.refresh(existing)
-                    
-                    # Send verification email
-                    email_data = {
-                        "to": existing.email,
-                        "subject": "Verify Your Account - SMS",
-                        "body": f"Welcome back! Here's your verification token {token}",
-                        "template": "notification.html",
-                        "template_data": {
-                            "title": "Verify Your Account",
-                            "name": existing.email,
-                            "body": (
-                                f"We noticed you tried to register again. Your account isn't verified yet. "
-                                f"Please verify your account using the button below to get started.<br><br>"
-                            ),
-                            "accent_color": "#000000",
-                            "button": {
-                                "text": "Verify Account",
-                                "url": f"{os.getenv('CLIENT_URL')}/auth/verify?token={token}"
-                            },
-                            "secondary_text": "This link will expire in 24 hours. If you did not create this account, please ignore this email."
-                        }
-                    }
+
+                    # Publish AUTH_WELCOME event
                     publisher = BasePublisher(service_name="auth-service")
                     await publisher.publish_event(
-                        event_type=EventType.SEND_EMAIL,
-                        payload=email_data
+                        event_type=EventType.AUTH_WELCOME,
+                        payload={
+                            "user_id": str(existing.id),
+                            "email": existing.email,
+                            "phone": existing.phone,
+                            "auth_type": existing.auth_type.value,
+                            "token": token
+                        }
                     )
-                    
-                   # Return the existing user with new token instead of raising exception
                     return existing, token
                 else:
                     raise HTTPException(400, "Email already registered")
@@ -149,46 +139,28 @@ class AuthService:
         
         # Generate verification token
         token = self._generate_verification_token(user.id)
-        
+        logger.info(f"Verification token: {token}")
         self.db.commit()
         self.db.refresh(user)
 
-        
-        # Publish welcome/verification notification
-        email_data = {
-            "to": user.email,
-            "subject": "Welcome to SMS",
-            "body": f"Welcome! Here's your verification token {token}",
-            "template": "notification.html",
-            "template_data": {
-                "title": "Welcome to Copycat LMS!",
-                "name": user.email,
-                "body": (
-                    f"We're excited to have you on board. Please verify your account using the button below to get started.<br><br>"
-                ),
-                "accent_color": "#000000",
-                "button": {
-                    "text": "Verify Account",
-                    "url": f"{os.getenv('CLIENT_URL')}/auth/verify?token={token}"
-                },
-                "secondary_text": "This link will expire in 24 hours. If you did not create this account, please ignore this email."
-            }
-        }
+        # Publish AUTH_WELCOME event
         publisher = BasePublisher(service_name="auth-service")
         await publisher.publish_event(
-            event_type=EventType.SEND_EMAIL,
-            payload=email_data
+            event_type=EventType.AUTH_WELCOME,
+            payload={
+                "user_id": str(user.id),
+                "email": user.email,
+                "phone": user.phone,
+                "auth_type": user.auth_type.value,
+                "token": token
+            }
         )
 
-        await publisher.publish_event(
-            event_type=EventType.USER_CREATED,
-            payload={"user_id": str(user.id), "email": user.email}
-        )
-        
         return user, token
     
     async def verify_account(self, token: str) -> User:
         """Verify user account with token"""
+        
         auth_token = self.db.query(AuthToken).filter(
             AuthToken.hash_tokens == self._hash_token(token)
         ).first()
@@ -244,39 +216,26 @@ class AuthService:
             self.db.flush()
 
             #generate token and commit before sending email
+        
             token = self._generate_verification_token(user.id)
+            logger.info(f"Verification token: {token}")
             self.db.commit()
             self.db.refresh(user)
-            
-            # Publish welcome/verification notification
-            email_data = {
-                "to": user.email,
-                "subject": "Welcome to Copycat LMS",
-                "body": f"Welcome! Here's your verification token {token}",
-                "template": "notification.html",
-                "template_data": {
-                    "title": "Welcome to Copycat LMS!",
-                    "name": user.email,
-                    "body": (
-                        f"We're excited to have you on board. Please verify your account using the button below to get started.<br><br>"
-                        f"Your verification token is: <strong>{token}</strong>"
-                    ),
-                    "accent_color": "#000000",
-                    "button": {
-                        "text": "Verify Account",
-                        "url": f"{os.getenv('CLIENT_URL')}/auth/verify?token={token}"
-                    },
-                    "secondary_text": "This link will expire in 24 hours. If you did not create this account, please ignore this email."
-                }
-            }
+
+            # Publish AUTH_WELCOME event to resend verification
             publisher = BasePublisher(service_name="auth-service")
             await publisher.publish_event(
-                event_type=EventType.SEND_EMAIL,
-                payload=email_data
+                event_type=EventType.AUTH_WELCOME,
+                payload={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "phone": user.phone,
+                    "auth_type": user.auth_type.value,
+                    "token": token
+                }
             )
-            # return user, token
 
-            raise HTTPException(403, "Please verify your account first, we've sent another verification token to your email")
+            raise HTTPException(403, "Please verify your account first — we've sent another verification code")
         
         # Generate tokens
         tokens = self._create_tokens(user)
@@ -304,36 +263,23 @@ class AuthService:
         
         # Generate new verification token
         token = self._generate_verification_token(user.id)
+        logger.info(f"Verification token: {token}")
         self.db.commit()
         self.db.refresh(user)
-        
-        # Send verification email
-        email_data = {
-            "to": user.email,
-            "subject": "Verify Your Account - SMS",
-            "body": f"Here's your verification token {token}",
-            "template": "notification.html",
-            "template_data": {
-                "title": "Verify Your Account",
-                "name": user.email,
-                "body": (
-                    f"You requested a new verification link. "
-                    f"Please verify your account using the button below to get started.<br><br>"
-                ),
-                "accent_color": "#000000",
-                "button": {
-                    "text": "Verify Account",
-                    "url": f"{os.getenv('CLIENT_URL')}/auth/verify?token={token}"
-                },
-                "secondary_text": "This link will expire in 24 hours. If you did not request this, please ignore this email."
-            }
-        }
+
+        # Publish AUTH_WELCOME event to resend verification
         publisher = BasePublisher(service_name="auth-service")
         await publisher.publish_event(
-            event_type=EventType.SEND_EMAIL,
-            payload=email_data
+            event_type=EventType.AUTH_WELCOME,
+            payload={
+                "user_id": str(user.id),
+                "email": user.email,
+                "phone": user.phone,
+                "auth_type": user.auth_type.value,
+                "token": token
+            }
         )
-        
+
         self._log_event("verification_resent", user.id)
         self.db.commit()
         
@@ -393,34 +339,18 @@ class AuthService:
         self._log_event("password_reset_requested", user.id)
         self.db.commit()
 
-        # Publish password reset notification
-        email_data = {
-            "to": user.email,
-            "subject": "Password Reset Request",
-            "body": f"Your reset token is: {token}",
-            "template": "notification.html",
-            "template_data": {
-                "title": "Reset Your Password",
-                "name": user.email,
-                "body": (
-                    f"We received a request to reset your password for your Copycat LMS account. "
-                    f"Click the button below to set a new password.<br><br>"
-                    f"Your reset token is: <strong>{token}</strong>"
-                ),
-                "accent_color": "#D32F2F",
-                "button": {
-                    "text": "Reset Password",
-                    "url": f"{os.getenv('CLIENT_URL')}/auth/reset-password?token={token}"
-                },
-                "secondary_text": "If you didn't request this, you can safely ignore this email. This link will expire in 1 hour."
-            }
-        }
         publisher = BasePublisher(service_name="auth-service")
         await publisher.publish_event(
-            event_type=EventType.SEND_EMAIL,
-            payload=email_data
+            event_type=EventType.AUTH_PASSWORD_RESET,
+            payload={
+                "user_id": str(user.id),
+                "email": user.email,
+                "phone": user.phone,
+                "auth_type": user.auth_type.value,
+                "token": token
+            }
         )
-        
+
         return token
     
     async def reset_password(self, token: str, new_password: str) -> None:
@@ -445,7 +375,8 @@ class AuthService:
     # Private helper methods
     def _generate_verification_token(self, user_id: uuid.UUID) -> str:
         """Generate and store verification token"""
-        token = secrets.token_urlsafe(32)
+        import string
+        token = "".join(secrets.choice(string.digits) for _ in range(6))
         
         auth_token = AuthToken(
             user_id=user_id,
@@ -485,3 +416,5 @@ class AuthService:
             to_user_id=to_user
         )
         self.db.add(event)
+
+

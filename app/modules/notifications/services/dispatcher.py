@@ -2,51 +2,58 @@
 NotificationDispatcher — the central notification engine.
 
 Given an event_type and a context payload, it:
-  1. Looks up the matching NotificationTemplate for the tenant
-  2. Renders the body with {{variable}} substitution
-  3. Sends via SMS and/or email depending on recipient contact info
-  4. Writes a NotificationLog row for every send attempt
+  1. Looks up the tenant's BusinessProfile (for sender name/email/SMS ID)
+  2. Looks up the tenant's NotificationTemplate for this channel+event
+  3. If no template found → logs SKIPPED (business is in full control)
+  4. Renders the body with {{variable}} substitution
+  5. Sends via SMS and/or email
+  6. Writes a NotificationLog row for every send attempt
+
+All message content is 100% controlled by the business — no hardcoded
+fallbacks. If the business hasn't created a template for an event, the
+notification is skipped and logged so they can see what's missing.
 """
 import logging
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from app.modules.notifications.models import NotificationLog, NotifChannel, NotifStatus
-from app.modules.notifications.services.renderer import render, build_context
+from app.modules.notifications.services.renderer import render
 from app.modules.notifications.services.send_sms import send_sms
 from app.modules.notifications.services.send_email import send_email
-from app.modules.obligations.models import NotificationTemplate, TemplateChannel
+from app.modules.obligations.models import NotificationTemplate, TemplateType
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-# ─── Default fallback templates (used when tenant hasn't created one) ──────────
-
-_DEFAULT_TEMPLATES = {
-    "obligation.created": {
-        "sms":   "Hi {{payer_name}}, a payment obligation of {{currency}} {{amount_due}} has been created for account {{account_no}}. Due: {{due_date}}.",
-        "email": "<p>Hi <b>{{payer_name}}</b>,</p><p>A payment obligation of <b>{{currency}} {{amount_due}}</b> has been created for account <b>{{account_no}}</b>. Due date: {{due_date}}.</p>",
-    },
-    "payment.matched": {
-        "sms":   "Hi {{payer_name}}, we received {{currency}} {{amount_paid}} for {{account_no}}. Balance: {{currency}} {{balance}}. Ref: {{psp_ref}}. Thank you!",
-        "email": "<p>Hi <b>{{payer_name}}</b>,</p><p>Payment of <b>{{currency}} {{amount_paid}}</b> received for <b>{{account_no}}</b>. Outstanding balance: <b>{{currency}} {{balance}}</b>. Ref: {{psp_ref}}.</p>",
-    },
-    "payment.partial": {
-        "sms":   "Hi {{payer_name}}, we received {{currency}} {{amount_paid}} for {{account_no}}. Outstanding: {{currency}} {{balance}}. Ref: {{psp_ref}}.",
-        "email": "<p>Hi <b>{{payer_name}}</b>,</p><p>Partial payment of <b>{{currency}} {{amount_paid}}</b> received for <b>{{account_no}}</b>. Outstanding: <b>{{currency}} {{balance}}</b>.</p>",
-    },
-    "auth.welcome": {
-        "sms":   "Welcome to PesaGrid! Your account is ready. Log in at {{login_url}}.",
-        "email": "<h2>Welcome to PesaGrid!</h2><p>Your business account is ready. <a href='{{login_url}}'>Log in here</a>.</p>",
-    },
-    "auth.password_reset": {
-        "sms":   "Your PesaGrid password reset code is {{otp}}. Expires in 15 minutes.",
-        "email": "<p>Your password reset link: <a href='{{reset_url}}'>Click here</a>. Expires in 15 minutes.</p>",
-    },
+# Maps event string → TemplateType for template lookup
+_EVENT_TO_TEMPLATE_TYPE = {
+    "obligation.created":  TemplateType.PAYMENT_REMINDER,
+    "obligation.due":      TemplateType.PAYMENT_REMINDER,
+    "payment.matched":     TemplateType.PAYMENT_RECEIPT,
+    "payment.partial":     TemplateType.PAYMENT_RECEIPT,
+    "payment.unmatched":   TemplateType.CUSTOM,
+    "auth.welcome":        TemplateType.CUSTOM,
+    "auth.password_reset": TemplateType.CUSTOM,
 }
+
+
+def _build_from_email(display_name: str, domain_or_email: str, platform: bool = False) -> str:
+    """
+    Build a Resend-compatible from address.
+
+    - platform=True  (auth emails from us)  → pesagrid@mails.ryfty.net
+    - platform=False (biz → payer emails)   → skyview-apts@mails.ryfty.net
+    - domain_or_email contains '@'          → use it as-is
+    """
+    if "@" in domain_or_email:
+        return domain_or_email
+    prefix = "pesagrid" if platform else display_name.lower().strip().replace(" ", "-")[:30]
+    return f"{prefix}@{domain_or_email}"
 
 
 class NotificationDispatcher:
@@ -54,30 +61,45 @@ class NotificationDispatcher:
     def __init__(self, db: Session):
         self.db = db
 
-    def _resolve_template(
-        self, collection_id: uuid.UUID, event_type: str, channel: str
-    ) -> Optional[str]:
-        """
-        Look up the tenant's custom NotificationTemplate for this event+channel.
-        Falls back to the built-in default if none exists.
-        """
-        # Map event_type to TemplateType loosely (best-effort lookup)
-        tmpl = (
-            self.db.query(NotificationTemplate)
-            .filter(
-                NotificationTemplate.collection_id == collection_id,
-                NotificationTemplate.channel == channel.upper(),
-                NotificationTemplate.is_active.is_(True),
-                NotificationTemplate.is_default.is_(True),
+    def _get_business_profile(self, collection_id: uuid.UUID):
+        try:
+            from app.modules.accounts.models import BusinessProfile
+            return (
+                self.db.query(BusinessProfile)
+                .filter(BusinessProfile.collection_id == collection_id)
+                .first()
             )
-            .first()
-        )
-        if tmpl:
-            return tmpl.body, getattr(tmpl, "subject", None), tmpl.id
+        except Exception:
+            return None
 
-        # Use built-in fallback
-        fallback = _DEFAULT_TEMPLATES.get(event_type, {}).get(channel)
-        return fallback, None, None
+    def _resolve_template(
+        self,
+        collection_id: uuid.UUID,
+        event_type: str,
+        channel: str,
+    ) -> Tuple[Optional[str], Optional[str], Optional[uuid.UUID]]:
+        """
+        Look up the tenant's NotificationTemplate for this event + channel.
+        Returns (body, subject, template_id) or (None, None, None).
+        No hardcoded fallbacks — business is fully in control.
+        """
+        tmpl_type = _EVENT_TO_TEMPLATE_TYPE.get(event_type)
+        q = self.db.query(NotificationTemplate).filter(
+            NotificationTemplate.collection_id == collection_id,
+            NotificationTemplate.channel == channel.upper(),
+            NotificationTemplate.is_active.is_(True),
+        )
+        if tmpl_type:
+            exact = q.filter(
+                NotificationTemplate.template_type == tmpl_type,
+                NotificationTemplate.is_default.is_(True),
+            ).first()
+            if exact:
+                return exact.body, getattr(exact, "subject", None), exact.id
+            any_match = q.filter(NotificationTemplate.template_type == tmpl_type).first()
+            if any_match:
+                return any_match.body, getattr(any_match, "subject", None), any_match.id
+        return None, None, None
 
     def _log(
         self,
@@ -110,83 +132,6 @@ class NotificationDispatcher:
         self.db.add(log)
         self.db.commit()
 
-    async def _send_sms(
-        self,
-        phone: str,
-        body: str,
-        collection_id: uuid.UUID,
-        payer_id: Optional[uuid.UUID],
-        event_type: str,
-        subject: Optional[str],
-        template_id: Optional[uuid.UUID],
-    ) -> None:
-        try:
-            result = await send_sms(phone, body)
-            err = result.get("error")
-            self._log(
-                collection_id=collection_id,
-                payer_id=payer_id,
-                channel=NotifChannel.SMS,
-                recipient=phone,
-                event_type=event_type,
-                body=body,
-                subject=subject,
-                status=NotifStatus.FAILED if err else NotifStatus.SENT,
-                template_id=template_id,
-                error_msg=err,
-            )
-        except Exception as e:
-            self._log(
-                collection_id=collection_id,
-                payer_id=payer_id,
-                channel=NotifChannel.SMS,
-                recipient=phone,
-                event_type=event_type,
-                body=body,
-                subject=subject,
-                status=NotifStatus.FAILED,
-                template_id=template_id,
-                error_msg=str(e),
-            )
-
-    async def _send_email(
-        self,
-        email: str,
-        subject: str,
-        body: str,
-        collection_id: uuid.UUID,
-        payer_id: Optional[uuid.UUID],
-        event_type: str,
-        template_id: Optional[uuid.UUID],
-    ) -> None:
-        try:
-            result = await send_email(email, subject, body)
-            self._log(
-                collection_id=collection_id,
-                payer_id=payer_id,
-                channel=NotifChannel.EMAIL,
-                recipient=email,
-                event_type=event_type,
-                body=body,
-                subject=subject,
-                status=NotifStatus.SENT if not result.get("skipped") else NotifStatus.SKIPPED,
-                template_id=template_id,
-                provider_ref=result.get("id"),
-            )
-        except Exception as e:
-            self._log(
-                collection_id=collection_id,
-                payer_id=payer_id,
-                channel=NotifChannel.EMAIL,
-                recipient=email,
-                event_type=event_type,
-                body=body,
-                subject=subject,
-                status=NotifStatus.FAILED,
-                template_id=template_id,
-                error_msg=str(e),
-            )
-
     async def dispatch(
         self,
         event_type: str,
@@ -198,45 +143,62 @@ class NotificationDispatcher:
         email_subject: Optional[str] = None,
     ) -> None:
         """
-        Main dispatch entry point.
-
-        - Resolves template (custom → default fallback)
-        - Renders body with context
-        - Sends SMS if phone provided
-        - Sends email if email provided
-        - Logs every attempt
+        Main dispatch. Resolves sender identity from BusinessProfile,
+        looks up tenant templates, renders, sends, and logs.
         """
         if not phone and not email:
-            logger.debug(f"dispatch({event_type}): no contact info — skipping")
             return
 
-        # SMS
-        if phone:
-            body_tpl, subject, tmpl_id = self._resolve_template(collection_id, event_type, "sms")
-            if body_tpl:
-                rendered_body = render(body_tpl, context)
-                await self._send_sms(
-                    phone=phone,
-                    body=rendered_body,
-                    collection_id=collection_id,
-                    payer_id=payer_id,
-                    event_type=event_type,
-                    subject=subject,
-                    template_id=tmpl_id,
-                )
+        profile = self._get_business_profile(collection_id)
+        sms_sender  = settings.SMS_SENDER_ID
+        sender_name = (profile.display_name  if profile else None) or "PesaGrid"
+        email_domain_or_addr = (profile.email_from if profile else None) or settings.RESEND_FROM_EMAIL
+        is_platform_email = event_type.startswith("auth.")  # auth emails come from PesaGrid, not the business
+        email_from  = _build_from_email(sender_name, email_domain_or_addr, platform=is_platform_email)
 
-        # Email
+        # ── SMS ───────────────────────────────────────────────────────────────
+        if phone:
+            body_tpl, _, tmpl_id = self._resolve_template(collection_id, event_type, "sms")
+            if not body_tpl:
+                logger.info(f"No SMS template for '{event_type}' — collection {collection_id} skipped")
+                self._log(collection_id, payer_id, NotifChannel.SMS, phone,
+                          event_type, "", None, NotifStatus.SKIPPED,
+                          error_msg="No template configured")
+            else:
+                rendered = render(body_tpl, {**context, "sender_name": sender_name})
+                try:
+                    result  = await send_sms(phone, rendered)
+                    err     = result.get("error")
+                    self._log(collection_id, payer_id, NotifChannel.SMS, phone,
+                              event_type, rendered, None,
+                              NotifStatus.FAILED if err else NotifStatus.SENT,
+                              tmpl_id, error_msg=err)
+                except Exception as e:
+                    self._log(collection_id, payer_id, NotifChannel.SMS, phone,
+                              event_type, rendered, None, NotifStatus.FAILED,
+                              tmpl_id, error_msg=str(e))
+
+        # ── Email ─────────────────────────────────────────────────────────────
         if email:
             body_tpl, subject, tmpl_id = self._resolve_template(collection_id, event_type, "email")
-            if body_tpl:
-                rendered_body = render(body_tpl, context)
-                subject = email_subject or (render(subject, context) if subject else event_type.replace(".", " ").title())
-                await self._send_email(
-                    email=email,
-                    subject=subject,
-                    body=rendered_body,
-                    collection_id=collection_id,
-                    payer_id=payer_id,
-                    event_type=event_type,
-                    template_id=tmpl_id,
+            if not body_tpl:
+                logger.info(f"No email template for '{event_type}' — collection {collection_id} skipped")
+                self._log(collection_id, payer_id, NotifChannel.EMAIL, email,
+                          event_type, "", None, NotifStatus.SKIPPED,
+                          error_msg="No template configured")
+            else:
+                rendered      = render(body_tpl, {**context, "sender_name": sender_name})
+                final_subject = (
+                    email_subject
+                    or (render(subject, context) if subject else event_type.replace(".", " ").title())
                 )
+                try:
+                    result = await send_email(email, final_subject, rendered, from_email=email_from)
+                    self._log(collection_id, payer_id, NotifChannel.EMAIL, email,
+                              event_type, rendered, final_subject,
+                              NotifStatus.SENT if not result.get("skipped") else NotifStatus.SKIPPED,
+                              tmpl_id, provider_ref=result.get("id"))
+                except Exception as e:
+                    self._log(collection_id, payer_id, NotifChannel.EMAIL, email,
+                              event_type, rendered, final_subject,
+                              NotifStatus.FAILED, tmpl_id, error_msg=str(e))

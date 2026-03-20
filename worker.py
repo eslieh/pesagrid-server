@@ -3,6 +3,10 @@ import logging
 import signal
 from app.rabbitmq import BaseConsumer, MessageEnvelope, EventType
 from app.modules.ingestion.reconciliation import reconcile_transaction
+from app.modules.notifications.services.send_sms import send_sms
+from app.modules.notifications.services.send_email import send_email
+from app.modules.notifications.services.dispatcher import _build_from_email
+from app.core.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -111,12 +115,71 @@ class PesagridWorker:
         await _dispatch("obligation.created", envelope.payload)
 
     async def handle_auth_welcome(self, envelope: MessageEnvelope):
-        logger.info(f"👋 auth.welcome — sending welcome email")
-        await _dispatch("auth.welcome", envelope.payload)
+        logger.info(f"👋 auth.welcome — sending welcome email/sms")
+        payload = envelope.payload
+        token = payload.get("token", "")
+        
+        subject = "Welcome to PesaGrid — verify your account"
+        sms_body = f"Welcome to PesaGrid! Your verification code: {token}. Expires in 24 hours."
+        html_body = (
+            f"<h2>Welcome to PesaGrid!</h2>"
+            f"<p>Your account is almost ready. Verify it here:</p>"
+            f"<p><a href='{settings.CLIENT_URL}/auth/verify?token={token}'>Verify Account</a></p>"
+            f"<p>Or use code: <strong>{token}</strong></p>"
+            f"<p>This link expires in 24 hours.</p>"
+        )
+        await self._send_auth_notification(payload, subject, sms_body, html_body)
 
     async def handle_auth_password_reset(self, envelope: MessageEnvelope):
-        logger.info(f"🔑 auth.password_reset — sending reset link")
-        await _dispatch("auth.password_reset", envelope.payload)
+        logger.info(f"🔑 auth.password_reset — sending reset link/sms")
+        payload = envelope.payload
+        token = payload.get("token", "")
+
+        subject = "Reset your PesaGrid password"
+        sms_body = f"PesaGrid password reset code: {token}. Expires in 1 hour. Ignore if you didn't request this."
+        html_body = (
+            f"<h2>Reset your password</h2>"
+            f"<p>Click to set a new password: <a href='{settings.CLIENT_URL}/auth/reset-password?token={token}'>Reset Password</a></p>"
+            f"<p>Or use code: <strong>{token}</strong></p>"
+            f"<p>Expires in 1 hour. If you didn't request this, ignore this message.</p>"
+        )
+        await self._send_auth_notification(payload, subject, sms_body, html_body)
+
+    async def _send_auth_notification(self, payload: dict, subject: str, sms_body: str, html_body: str):
+        """Helper to send auth emails/sms using the correct channel fallback"""
+        email = payload.get("email")
+        phone = payload.get("phone")
+        auth_type = payload.get("auth_type")
+        from_email = _build_from_email("pesagrid", settings.RESEND_FROM_EMAIL, platform=True)
+
+        sent = False
+        if auth_type == "phone" and phone:
+            try:
+                await send_sms(phone, sms_body)
+                sent = True
+            except Exception as e:
+                logger.warning(f"SMS notify failed: {e}")
+
+        if auth_type == "email" and email:
+            try:
+                await send_email(email, subject, html_body, from_email=from_email)
+                sent = True
+            except Exception as e:
+                logger.warning(f"Email notify failed: {e}")
+
+        # Fallback
+        if not sent:
+            if email:
+                try:
+                    await send_email(email, subject, html_body, from_email=from_email)
+                    sent = True
+                except Exception as e:
+                    logger.warning(f"Fallback email failed: {e}")
+            if not sent and phone:
+                try:
+                    await send_sms(phone, sms_body)
+                except Exception as e:
+                    logger.warning(f"Fallback SMS failed: {e}")
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
