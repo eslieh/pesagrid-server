@@ -7,10 +7,22 @@ import uuid
 EXCHANGE_NAME = "pesagrid.events"
 
 class EventType(str, Enum):
-    # Notification Events
+    # Direct send events (notification worker dispatches these)
     SEND_EMAIL = "notification.email.send"
-    SEND_SMS = "notification.sms.send"
-    SEND_PUSH = "notification.push.send"
+    SEND_SMS   = "notification.sms.send"
+    SEND_PUSH  = "notification.push.send"
+    # Ingestion
+    PAYMENT_RECEIVED  = "payment.received"    # fired after a transaction is ingested
+    # Reconciliation outcomes
+    PAYMENT_MATCHED   = "payment.matched"     # obligation → PAID
+    PAYMENT_PARTIAL   = "payment.partial"     # obligation → PARTIAL
+    PAYMENT_UNMATCHED = "payment.unmatched"   # no obligation found
+    # Obligations lifecycle
+    OBLIGATION_CREATED = "obligation.created"
+    OBLIGATION_DUE     = "obligation.due"     # scheduled reminder (future)
+    # Auth
+    AUTH_WELCOME        = "auth.welcome"
+    AUTH_PASSWORD_RESET = "auth.password_reset"
 
 class Priority(int, Enum):
     LOW = 0

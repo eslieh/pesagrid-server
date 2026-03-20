@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "PesaGrid Appp"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
+    BASE_URL: str = os.getenv("BASE_URL", "http://localhost:8000")
 
     # Security / JWT
     SECRET_KEY: str
@@ -41,6 +42,16 @@ class Settings(BaseSettings):
     RABBITMQ_CONNECTION_STRING: str = os.getenv("RABBITMQ_CONNECTION_STRING")
 
     CLIENT_URL: str = os.getenv("CLIENT_URL")
+
+    # Notifications — Resend (email)
+    RESEND_API_KEY:   str = os.getenv("RESEND_API_KEY", "")
+    RESEND_FROM_EMAIL: str = os.getenv("RESEND_FROM_EMAIL", "mails@ryfty.net")
+
+    # Notifications — Hostpinnacle (SMS)
+    SMS_USER_ID:   str = os.getenv("SMS_USER_ID", "")
+    SMS_PASSWORD:  str = os.getenv("SMS_PASSWORD", "")
+    SMS_API_KEY:   str = os.getenv("SMS_API_KEY", "")
+    SMS_SENDER_ID: str = os.getenv("SMS_SENDER_ID", "Intacom")
 
     # Cookie Configuration
     COOKIE_DOMAIN: Optional[str] = None  # None for same-origin

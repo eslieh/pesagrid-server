@@ -1,0 +1,157 @@
+import uuid
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, Depends, Query, Request, HTTPException, BackgroundTasks, status
+from sqlalchemy.orm import Session
+import logging
+
+from app.core.dependancies import get_current_verified_user, get_db
+from app.modules.auth.models import User
+from app.modules.ingestion.models import TransactionStatus
+from app.modules.ingestion.schema import (
+    TransactionResponse, TransactionListResponse, ManualPaymentCreate,
+    MpesaC2BCallback, MpesaSTKCallback,
+)
+from app.modules.ingestion.services import IngestionService
+from app.modules.ingestion.normalizers.mpesa import normalize_c2b, normalize_stk
+from app.modules.ingestion.reconciliation import reconcile_transaction
+
+logger = logging.getLogger(__name__)
+
+# ─── Webhook router (no auth — PSPs fire these) ───────────────────────────────
+webhook_router = APIRouter(tags=["Webhooks"])
+
+# ─── Transactions router (authenticated — business views/adds payments) ────────
+transactions_router = APIRouter(tags=["Transactions"])
+
+
+def get_ingestion_service(
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> IngestionService:
+    """Resolve IngestionService by tenant ID from the URL path."""
+    return IngestionService(db=db, collection_id=collection_id)
+
+
+def get_authed_service(
+    current_user: User = Depends(get_current_verified_user),
+    db: Session = Depends(get_db),
+) -> IngestionService:
+    return IngestionService(db=db, collection_id=current_user.id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WEBHOOK ENDPOINTS — no authentication
+#  PSPs call these with raw payment callbacks
+# ══════════════════════════════════════════════════════════════════════════════
+
+@webhook_router.post(
+    "/{collection_id}/mpesa/callback",
+    summary="M-PESA C2B / STK callback",
+    status_code=status.HTTP_200_OK,
+)
+async def mpesa_callback(
+    collection_id: uuid.UUID,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    service: IngestionService = Depends(get_ingestion_service),
+):
+    """
+    Safaricom fires this URL for C2B (paybill) and STK push results.
+
+    **Always returns HTTP 200 immediately** — Safaricom expects instant ACK.
+    Ingestion and reconciliation run as background tasks after the response
+    is sent, so PSP retries are never triggered by processing latency.
+    """
+    # ── 1. Acknowledge immediately ──────────────────────────────────────────
+    # Parse body first (must happen before returning)
+    try:
+        payload: Dict[str, Any] = await request.json()
+    except Exception:
+        logger.warning(f"M-PESA webhook received non-JSON body for collection {collection_id}")
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+    # ── 2. Normalize (fast, in-process) ────────────────────────────────────
+    if "Body" in payload and "stkCallback" in payload.get("Body", {}):
+        normalized = normalize_stk(payload)
+        if normalized is None:
+            return {"ResultCode": 0, "ResultDesc": "Payment not completed — acknowledged"}
+    elif "TransID" in payload:
+        normalized = normalize_c2b(payload)
+    else:
+        logger.warning(f"Unknown M-PESA payload for collection {collection_id}: {list(payload.keys())}")
+        return {"ResultCode": 0, "ResultDesc": "Unrecognised shape — acknowledged"}
+
+    # ── 3. Store transaction synchronously (fast DB write) ──────────────────
+    # We need the transaction_id before returning so the worker can find it.
+    txn, is_new = await service.ingest_normalized(normalized, psp_type="mpesa")
+
+    # ── 4. Fire reconciliation as a background task ─────────────────────────
+    # This runs AFTER the HTTP response is sent to Safaricom.
+    if is_new:
+        background_tasks.add_task(reconcile_transaction, str(txn.id))
+
+    # ── 5. Return ACK immediately ────────────────────────────────────────────
+    return {
+        "ResultCode": 0,
+        "ResultDesc": "Accepted",
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TRANSACTION ENDPOINTS — authenticated (business views / manual entry)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@transactions_router.post(
+    "/",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Manual payment entry",
+)
+async def create_manual_payment(
+    data: ManualPaymentCreate,
+    current_user: User = Depends(get_current_verified_user),
+    service: IngestionService = Depends(get_authed_service),
+):
+    """
+    Record a payment that arrived outside the normal webhook flow
+    (cash, bank transfer, cheque, etc.).
+
+    The transaction is published to the reconciliation queue the same
+    way as a webhook payment.
+    """
+    return await service.ingest_manual(data, current_user_id=current_user.id)
+
+
+@transactions_router.get(
+    "/",
+    response_model=TransactionListResponse,
+    summary="List transactions",
+)
+def list_transactions(
+    account_no:    Optional[str]              = Query(None, description="Filter by account number"),
+    psp_type:      Optional[str]              = Query(None, description="Filter by PSP (mpesa, kcb…)"),
+    txn_status:    Optional[TransactionStatus] = Query(None, alias="status"),
+    skip:          int                        = Query(0, ge=0),
+    limit:         int                        = Query(50, ge=1, le=200),
+    service: IngestionService = Depends(get_authed_service),
+):
+    total, items = service.list_transactions(
+        account_no=account_no,
+        psp_type=psp_type,
+        txn_status=txn_status,
+        skip=skip,
+        limit=limit,
+    )
+    return TransactionListResponse(total=total, items=items)
+
+
+@transactions_router.get(
+    "/{transaction_id}",
+    response_model=TransactionResponse,
+    summary="Get transaction",
+)
+def get_transaction(
+    transaction_id: uuid.UUID,
+    service: IngestionService = Depends(get_authed_service),
+):
+    return service.get_transaction(transaction_id)

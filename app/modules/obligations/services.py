@@ -3,6 +3,7 @@ from typing import Optional, List, Tuple
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 import uuid
+import logging
 
 from app.modules.obligations.models import (
     Obligation, ObligationStatus,
@@ -17,6 +18,8 @@ from app.modules.obligations.schema import (
     RecurringConfigUpdate,
     NotificationTemplateCreate, NotificationTemplateUpdate,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ObligationService:
@@ -255,7 +258,37 @@ class ObligationService:
 
         self.db.commit()
         self.db.refresh(obligation)
+
+        # Publish event for the notification worker
+        payer = self._get_payer_or_404(data.payer_id)
+        await self._publish_obligation_created(obligation, payer)
+
         return obligation
+
+    async def _publish_obligation_created(self, obligation: Obligation, payer: Payer):
+        try:
+            from app.rabbitmq.publisher import BasePublisher
+            from app.rabbitmq.types import EventType, Priority
+            publisher = BasePublisher(service_name="obligations-service")
+            await publisher.publish_event(
+                event_type=EventType.OBLIGATION_CREATED,
+                payload={
+                    "obligation_id":  str(obligation.id),
+                    "collection_id":  str(obligation.collection_id),
+                    "payer_id":       str(payer.id),
+                    "payer_name":     payer.name,
+                    "phone":          payer.phone or "",
+                    "email":          payer.email or "",
+                    "account_no":     obligation.account_no,
+                    "amount_due":     float(obligation.amount_due),
+                    "currency":       obligation.currency,
+                    "due_date":       obligation.due_date.isoformat() if obligation.due_date else "",
+                    "description":    obligation.description or "",
+                },
+                priority=Priority.MEDIUM,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to publish obligation.created event: {e}")
 
     async def list_obligations(
         self,

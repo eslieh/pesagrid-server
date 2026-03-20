@@ -48,9 +48,16 @@ app.add_middleware(
 # Include routers
 from app.modules.auth.routers import auth_router
 from app.modules.obligations.routers import obligations_router
+from app.modules.accounts.routers import accounts_router
+from app.modules.ingestion.routers import webhook_router, transactions_router
+from app.modules.notifications.routers import notifications_router
 
-app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
-app.include_router(obligations_router, prefix="/api/v1/obligations", tags=["Obligations"])
+app.include_router(auth_router,          prefix="/api/v1/auth",         tags=["Authentication"])
+app.include_router(obligations_router,   prefix="/api/v1/obligations",   tags=["Obligations"])
+app.include_router(accounts_router,      prefix="/api/v1/accounts",      tags=["Accounts / PSP Settings"])
+app.include_router(webhook_router,       prefix="/api/v1/ingest",        tags=["Webhooks"])
+app.include_router(transactions_router,  prefix="/api/v1/transactions",  tags=["Transactions"])
+app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["Notifications"])
 
 @app.get("/health")
 async def health_check():
