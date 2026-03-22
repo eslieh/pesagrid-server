@@ -20,7 +20,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.dependancies import SessionLocal
-from app.modules.ingestion.models import Transaction, TransactionStatus
+from app.modules.ingestion.models import Transaction, TransactionStatus, CollectionPoint
 from app.modules.obligations.models import Obligation, ObligationStatus, Payer
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,18 @@ class ReconciliationService:
                 Payer.collection_id == collection_id,
                 Payer.account_no == account_no,
                 Payer.is_active.is_(True),
+            )
+            .first()
+        )
+
+    def _find_collection_point(self, collection_id: uuid.UUID, account_no: str) -> Optional[CollectionPoint]:
+        """Look up a virtual account target (bus, campaign, etc.)."""
+        return (
+            self.db.query(CollectionPoint)
+            .filter(
+                CollectionPoint.collection_id == collection_id,
+                CollectionPoint.account_no == account_no,
+                CollectionPoint.is_active.is_(True),
             )
             .first()
         )
@@ -108,18 +120,19 @@ class ReconciliationService:
     def reconcile(self, transaction_id: uuid.UUID) -> str:
         """
         Main reconciliation entry point. Reads the transaction from DB,
-        finds the best obligation, and applies the payment.
+        finds the best obligation, or falls back to a CollectionPoint.
 
-        Returns: "ALREADY_PROCESSED", "MATCHED", or "UNMATCHED"
+        Returns: "ALREADY_PROCESSED", "MATCHED", "CATEGORIZED", or "UNMATCHED"
         """
         txn = self.db.query(Transaction).filter(Transaction.id == transaction_id).first()
         if not txn:
             logger.warning(f"Reconcile: transaction {transaction_id} not found")
             return "ALREADY_PROCESSED"
 
-        if txn.status in (TransactionStatus.MATCHED, TransactionStatus.DUPLICATE, TransactionStatus.UNMATCHED):
+        if txn.status in (TransactionStatus.MATCHED, TransactionStatus.CATEGORIZED, TransactionStatus.DUPLICATE):
             logger.info(f"Reconcile: skipping already-{txn.status.value} transaction {transaction_id}")
             return "ALREADY_PROCESSED"
+
 
         if not txn.account_no:
             logger.warning(f"Reconcile: transaction {transaction_id} has no account_no — marking UNMATCHED")
@@ -131,31 +144,33 @@ class ReconciliationService:
         account_no = txn.account_no
         amount = Decimal(str(txn.amount))
 
-        # 1. Find payer
+        # 1. High-Volume Path: Try Fleet/Campaign (CollectionPoint) first
+        # This handles the majority of bulk traffic (Matatas, etc.) with minimal DB load.
+        cp = self._find_collection_point(collection_id, account_no)
+        if cp:
+            txn.collection_point_id = cp.id
+            txn.status = TransactionStatus.CATEGORIZED
+            self.db.commit()
+            logger.info(f"📁 Fleet Matched: txn {txn.id} → CP {cp.name}")
+            return "CATEGORIZED"
+
+        # 2. Invoicing Path: Try to find a specific Obligation
         payer = self._find_payer(collection_id, account_no)
-        if not payer:
-            logger.warning(
-                f"Reconcile: no active payer for account_no='{account_no}' "
-                f"in collection {collection_id} — marking UNMATCHED"
-            )
-            txn.status = TransactionStatus.UNMATCHED
-            self.db.commit()
-            return "UNMATCHED"
+        if payer:
+            obligation = self._find_best_obligation(payer.id, amount)
+            if obligation:
+                self._apply_payment(obligation, amount, txn)
+                return "MATCHED"
 
-        # 2. Find best obligation
-        obligation = self._find_best_obligation(payer.id, amount)
-        if not obligation:
-            logger.warning(
-                f"Reconcile: payer {payer.id} ({payer.name}) has no open obligations "
-                f"— marking UNMATCHED"
-            )
-            txn.status = TransactionStatus.UNMATCHED
-            self.db.commit()
-            return "UNMATCHED"
+        # 3. No match found
+        logger.warning(
+            f"Reconcile: no match for account_no='{account_no}' "
+            f"in collection {collection_id} — marking UNMATCHED"
+        )
+        txn.status = TransactionStatus.UNMATCHED
+        self.db.commit()
+        return "UNMATCHED"
 
-        # 3. Apply payment
-        self._apply_payment(obligation, amount, txn)
-        return "MATCHED"
 
 
 async def reconcile_transaction(transaction_id: str):
@@ -176,6 +191,12 @@ async def reconcile_transaction(transaction_id: str):
         result_status = service.reconcile(uuid.UUID(transaction_id))
 
         if result_status == "ALREADY_PROCESSED":
+            return True
+        
+        # CATEGORIZED is for bulk collection (Matatus). 
+        # The user requested to skip premium SMS receipts for these to save costs.
+        if result_status == "CATEGORIZED":
+            logger.info(f"Skipping notification for categorized transaction {transaction_id}")
             return True
 
         # Re-read for event payload
@@ -220,7 +241,7 @@ async def reconcile_transaction(transaction_id: str):
 
             event = (
                 EventType.PAYMENT_MATCHED
-                if ob and ob.status.value == "paid"
+                if ob and ob.status == ObligationStatus.PAID
                 else EventType.PAYMENT_PARTIAL
             )
         else:
@@ -235,11 +256,14 @@ async def reconcile_transaction(transaction_id: str):
         except Exception as e:
             logger.warning(f"Failed to publish {event.value} event: {e}")
 
-        return matched
+        return result_status == "MATCHED"
 
     except Exception as e:
         logger.error(f"❌ Reconciliation failed for transaction {transaction_id}: {e}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
     finally:
         db.close()
+
 

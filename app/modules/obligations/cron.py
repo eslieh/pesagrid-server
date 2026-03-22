@@ -194,44 +194,45 @@ async def run_reminders_cycle():
                 break
                 
             for ob in due_obs:
-            meta = dict(ob.meta or {})
-            if meta.get("reminder_sent_date") == today_str:
-                continue
-                
-            try:
-                payer = db.query(Payer).filter(Payer.id == ob.payer_id).first()
-                if not payer:
+                meta = dict(ob.meta or {})
+                if meta.get("reminder_sent_date") == today_str:
                     continue
                     
-                await publisher.publish_event(
-                    event_type=EventType.OBLIGATION_DUE,
-                    payload={
-                        "obligation_id":  str(ob.id),
-                        "collection_id":  str(ob.collection_id),
-                        "payer_id":       str(payer.id),
-                        "payer_name":     payer.name,
-                        "phone":          payer.phone or "",
-                        "email":          payer.email or "",
-                        "account_no":     ob.account_no,
-                        "amount_due":     float(ob.amount_due),
-                        "amount_paid":    float(ob.amount_paid),
-                        "balance":        float(ob.balance),
-                        "currency":       ob.currency,
-                        "due_date":       ob.due_date.isoformat(),
-                        "description":    ob.description or "",
-                    },
-                    priority=Priority.MEDIUM,
-                )
-                
-                meta["reminder_sent_date"] = today_str
-                ob.meta = meta
-                db.commit()
-                reminded_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send reminder for obligation {ob.id}: {e}")
-                db.rollback()
+                try:
+                    payer = db.query(Payer).filter(Payer.id == ob.payer_id).first()
+                    if not payer:
+                        continue
+                        
+                    await publisher.publish_event(
+                        event_type=EventType.OBLIGATION_DUE,
+                        payload={
+                            "obligation_id":  str(ob.id),
+                            "collection_id":  str(ob.collection_id),
+                            "payer_id":       str(payer.id),
+                            "payer_name":     payer.name,
+                            "phone":          payer.phone or "",
+                            "email":          payer.email or "",
+                            "account_no":     ob.account_no,
+                            "amount_due":     float(ob.amount_due),
+                            "amount_paid":    float(ob.amount_paid),
+                            "balance":        float(ob.balance),
+                            "currency":       ob.currency,
+                            "due_date":       ob.due_date.isoformat(),
+                            "description":    ob.description or "",
+                        },
+                        priority=Priority.MEDIUM,
+                    )
+                    
+                    meta["reminder_sent_date"] = today_str
+                    ob.meta = meta
+                    db.commit()
+                    reminded_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to send reminder for obligation {ob.id}: {e}")
+                    db.rollback()
             
             offset += 1000
+
                 
         if reminded_count > 0:
             logger.info(f"✅ Sent {reminded_count} due date reminders")

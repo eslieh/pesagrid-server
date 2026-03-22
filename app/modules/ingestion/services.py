@@ -7,11 +7,12 @@ import uuid
 import logging
 
 from app.modules.accounts.models import PSPConfig, PSPType
-from app.modules.ingestion.models import Transaction, TransactionStatus
+from app.modules.ingestion.models import Transaction, TransactionStatus, CollectionPoint
 from app.modules.ingestion.normalizers.mpesa import NormalizedPayment
-from app.modules.ingestion.schema import ManualPaymentCreate
-from app.rabbitmq.publisher import BasePublisher
-from app.rabbitmq.types import EventType, Priority
+from app.modules.ingestion.schema import ManualPaymentCreate, CollectionPointCreate, CollectionPointUpdate
+from app.rabbitmq import BasePublisher, EventType, Priority
+from sqlalchemy import func
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,113 @@ class AccountsService:
         cfg = self._get_or_404(psp_id)
         self.db.delete(cfg)
         self.db.commit()
+
+
+class CollectionPointService:
+    """Manages virtual account targets for bulk collections."""
+
+    def __init__(self, db: Session, collection_id: uuid.UUID):
+        self.db = db
+        self.collection_id = collection_id
+
+    def _get_or_404(self, cp_id: uuid.UUID) -> CollectionPoint:
+        cp = (
+            self.db.query(CollectionPoint)
+            .filter(CollectionPoint.id == cp_id, CollectionPoint.collection_id == self.collection_id)
+            .first()
+        )
+        if not cp:
+            raise HTTPException(status_code=404, detail="Collection point not found")
+        return cp
+
+    def create_collection_point(self, data: CollectionPointCreate) -> CollectionPoint:
+        account_no = data.account_no.strip().upper()
+        
+        # 1. Ensure it's not already used as a Payer account (collision with Invoicing)
+        from app.modules.obligations.models import Payer
+        existing_payer = (
+            self.db.query(Payer)
+            .filter(Payer.collection_id == self.collection_id, Payer.account_no == account_no)
+            .first()
+        )
+        if existing_payer:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Account number {account_no} is already assigned to a customer (Invoicing flow)"
+            )
+
+        cp = CollectionPoint(
+            collection_id=self.collection_id,
+            name=data.name,
+            account_no=account_no,
+            description=data.description,
+            is_active=data.is_active,
+            meta=data.meta or {},
+        )
+        try:
+            self.db.add(cp)
+            self.db.commit()
+            self.db.refresh(cp)
+            return cp
+        except IntegrityError:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Account number {account_no} already assigned to another collection point"
+            )
+
+
+    def list_collection_points(self) -> List[CollectionPoint]:
+        return (
+            self.db.query(CollectionPoint)
+            .filter(CollectionPoint.collection_id == self.collection_id)
+            .order_by(CollectionPoint.created_at.desc())
+            .all()
+        )
+
+    def get_collection_point_totals(self, cp_id: uuid.UUID):
+        """Aggregate total volume collected for this point."""
+        cp = self._get_or_404(cp_id)
+        total = (
+            self.db.query(func.sum(Transaction.amount))
+            .filter(Transaction.collection_point_id == cp.id)
+            .scalar()
+        ) or 0
+        return {
+            "collection_point_id": cp.id,
+            "name": cp.name,
+            "account_no": cp.account_no,
+            "total_collected": float(total),
+        }
+
+    def update_collection_point(self, cp_id: uuid.UUID, data: CollectionPointUpdate) -> CollectionPoint:
+        cp = self._get_or_404(cp_id)
+        update_data = data.model_dump(exclude_unset=True)
+        
+        if "account_no" in update_data and update_data["account_no"]:
+            account_no = update_data["account_no"].strip().upper()
+            update_data["account_no"] = account_no
+            
+            # 1. Ensure it's not already used as a Payer account (collision with Invoicing)
+            from app.modules.obligations.models import Payer
+            existing_payer = (
+                self.db.query(Payer)
+                .filter(Payer.collection_id == self.collection_id, Payer.account_no == account_no)
+                .first()
+            )
+            if existing_payer:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Account number {account_no} is already assigned to a customer (Invoicing flow)"
+                )
+        
+        for field, value in update_data.items():
+            setattr(cp, field, value)
+        self.db.commit()
+        self.db.refresh(cp)
+        return cp
+
+
 
 
 class IngestionService:
@@ -212,6 +320,7 @@ class IngestionService:
         account_no: Optional[str] = None,
         psp_type: Optional[str] = None,
         txn_status: Optional[TransactionStatus] = None,
+        collection_point_id: Optional[uuid.UUID] = None,
         skip: int = 0,
         limit: int = 50,
     ) -> Tuple[int, List[Transaction]]:
@@ -222,6 +331,9 @@ class IngestionService:
             q = q.filter(Transaction.psp_type == psp_type)
         if txn_status:
             q = q.filter(Transaction.status == txn_status)
+        if collection_point_id:
+            q = q.filter(Transaction.collection_point_id == collection_point_id)
+            
         total = q.count()
         items = q.order_by(Transaction.ingested_at.desc()).offset(skip).limit(limit).all()
         return total, items

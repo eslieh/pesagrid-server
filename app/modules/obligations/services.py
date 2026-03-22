@@ -143,13 +143,29 @@ class ObligationService:
         if data.group_id:
             self._get_group_or_404(data.group_id)  # validate group belongs to collection
 
+        account_no = data.account_no.strip().upper() if data.account_no else None
+        
+        # 1. Ensure it's not already used as a CollectionPoint (Bulk flow)
+        if account_no:
+            from app.modules.ingestion.models import CollectionPoint
+            existing_cp = (
+                self.db.query(CollectionPoint)
+                .filter(CollectionPoint.collection_id == self.collection_id, CollectionPoint.account_no == account_no)
+                .first()
+            )
+            if existing_cp:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Account number {account_no} is already assigned to a fleet/collection point."
+                )
+
         payer = Payer(
             collection_id=self.collection_id,
             group_id=data.group_id,
             name=data.name,
             phone=data.phone,
             email=data.email,
-            account_no=data.account_no,
+            account_no=account_no,
             identifier=data.identifier,
             notes=data.notes,
             meta=data.meta,
@@ -159,6 +175,7 @@ class ObligationService:
         self.db.commit()
         self.db.refresh(payer)
         return payer
+
 
     async def list_payers(
         self,
@@ -183,12 +200,32 @@ class ObligationService:
         payer = self._get_payer_or_404(payer_id)
         if data.group_id:
             self._get_group_or_404(data.group_id)
-        for field, value in data.model_dump(exclude_unset=True).items():
+
+        update_data = data.model_dump(exclude_unset=True)
+        if "account_no" in update_data and update_data["account_no"]:
+            account_no = update_data["account_no"].strip().upper()
+            update_data["account_no"] = account_no
+            
+            # 1. Ensure it's not already used as a CollectionPoint (Bulk flow)
+            from app.modules.ingestion.models import CollectionPoint
+            existing_cp = (
+                self.db.query(CollectionPoint)
+                .filter(CollectionPoint.collection_id == self.collection_id, CollectionPoint.account_no == account_no)
+                .first()
+            )
+            if existing_cp:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Account number {account_no} is already assigned to a fleet/collection point."
+                )
+
+        for field, value in update_data.items():
             setattr(payer, field, value)
         payer.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(payer)
         return payer
+
 
     async def delete_payer(self, payer_id: uuid.UUID) -> None:
         payer = self._get_payer_or_404(payer_id)

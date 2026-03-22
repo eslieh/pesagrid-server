@@ -10,8 +10,9 @@ from app.modules.ingestion.models import TransactionStatus
 from app.modules.ingestion.schema import (
     TransactionResponse, TransactionListResponse, ManualPaymentCreate,
     MpesaC2BCallback, MpesaSTKCallback,
+    CollectionPointCreate, CollectionPointUpdate, CollectionPointRead
 )
-from app.modules.ingestion.services import IngestionService
+from app.modules.ingestion.services import IngestionService, CollectionPointService
 from app.rabbitmq import BasePublisher, EventType, Priority
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,17 @@ webhook_router = APIRouter(tags=["Webhooks"])
 
 # ─── Transactions router (authenticated — business views/adds payments) ────────
 transactions_router = APIRouter(tags=["Transactions"])
+
+# ─── Collection Points router (authenticated — fleet/bulk tracking) ─────────────
+collection_points_router = APIRouter(tags=["Collection Points"])
+
+
+def get_collection_point_service(
+    current_user: User = Depends(get_current_verified_user),
+    db: Session = Depends(get_db),
+) -> CollectionPointService:
+    return CollectionPointService(db=db, collection_id=current_user.id)
+
 
 
 def get_ingestion_service(
@@ -143,3 +155,61 @@ def get_transaction(
     service: IngestionService = Depends(get_authed_service),
 ):
     return service.get_transaction(transaction_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  COLLECTION POINT ENDPOINTS — authenticated (fleet / bulk tracking)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@collection_points_router.post(
+    "/",
+    response_model=CollectionPointRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create collection point",
+)
+def create_collection_point(
+    data: CollectionPointCreate,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    """
+    Define a new target for bulk collections (a bus, a campaign, etc.).
+    All payments to this account_no will be grouped here.
+    """
+    return service.create_collection_point(data)
+
+
+@collection_points_router.get(
+    "/",
+    response_model=list[CollectionPointRead],
+    summary="List collection points",
+)
+def list_collection_points(
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    return service.list_collection_points()
+
+
+@collection_points_router.get(
+    "/{cp_id}/totals",
+    summary="Get collection point volume",
+)
+def get_collection_point_totals(
+    cp_id: uuid.UUID,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    """Returns the total sum of all money collected by this specific target."""
+    return service.get_collection_point_totals(cp_id)
+
+
+@collection_points_router.patch(
+    "/{cp_id}",
+    response_model=CollectionPointRead,
+    summary="Update collection point",
+)
+def update_collection_point(
+    cp_id: uuid.UUID,
+    data: CollectionPointUpdate,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    return service.update_collection_point(cp_id, data)
+

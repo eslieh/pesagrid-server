@@ -49,7 +49,7 @@ app.add_middleware(
 from app.modules.auth.routers import auth_router
 from app.modules.obligations.routers import obligations_router
 from app.modules.accounts.routers import accounts_router
-from app.modules.ingestion.routers import webhook_router, transactions_router
+from app.modules.ingestion.routers import webhook_router, transactions_router, collection_points_router
 from app.modules.notifications.routers import notifications_router
 from app.modules.dashboard.routers import dashboard_router
 
@@ -59,8 +59,7 @@ app.include_router(accounts_router,      prefix="/api/v1/accounts",      tags=["
 app.include_router(dashboard_router,     prefix="/api/v1/dashboard",     tags=["Dashboard"])
 app.include_router(webhook_router,       prefix="/api/v1/ingest",        tags=["Webhooks"])
 app.include_router(transactions_router,  prefix="/api/v1/transactions",  tags=["Transactions"])
-app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["Notifications"])
-app.include_router(transactions_router,  prefix="/api/v1/transactions",  tags=["Transactions"])
+app.include_router(collection_points_router, prefix="/api/v1/collection-points", tags=["Collection Points"])
 app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["Notifications"])
 
 @app.get("/health")
