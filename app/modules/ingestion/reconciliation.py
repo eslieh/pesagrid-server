@@ -105,27 +105,27 @@ class ReconciliationService:
             f"status={obligation.status.value}"
         )
 
-    def reconcile(self, transaction_id: uuid.UUID) -> bool:
+    def reconcile(self, transaction_id: uuid.UUID) -> str:
         """
         Main reconciliation entry point. Reads the transaction from DB,
         finds the best obligation, and applies the payment.
 
-        Returns True if matched, False if unmatched.
+        Returns: "ALREADY_PROCESSED", "MATCHED", or "UNMATCHED"
         """
         txn = self.db.query(Transaction).filter(Transaction.id == transaction_id).first()
         if not txn:
             logger.warning(f"Reconcile: transaction {transaction_id} not found")
-            return False
+            return "ALREADY_PROCESSED"
 
-        if txn.status in (TransactionStatus.MATCHED, TransactionStatus.DUPLICATE):
+        if txn.status in (TransactionStatus.MATCHED, TransactionStatus.DUPLICATE, TransactionStatus.UNMATCHED):
             logger.info(f"Reconcile: skipping already-{txn.status.value} transaction {transaction_id}")
-            return True
+            return "ALREADY_PROCESSED"
 
         if not txn.account_no:
             logger.warning(f"Reconcile: transaction {transaction_id} has no account_no — marking UNMATCHED")
             txn.status = TransactionStatus.UNMATCHED
             self.db.commit()
-            return False
+            return "UNMATCHED"
 
         collection_id = txn.collection_id
         account_no = txn.account_no
@@ -140,7 +140,7 @@ class ReconciliationService:
             )
             txn.status = TransactionStatus.UNMATCHED
             self.db.commit()
-            return False
+            return "UNMATCHED"
 
         # 2. Find best obligation
         obligation = self._find_best_obligation(payer.id, amount)
@@ -151,11 +151,11 @@ class ReconciliationService:
             )
             txn.status = TransactionStatus.UNMATCHED
             self.db.commit()
-            return False
+            return "UNMATCHED"
 
         # 3. Apply payment
         self._apply_payment(obligation, amount, txn)
-        return True
+        return "MATCHED"
 
 
 async def reconcile_transaction(transaction_id: str):
@@ -173,13 +173,16 @@ async def reconcile_transaction(transaction_id: str):
     try:
         service = ReconciliationService(db)
         # Re-fetch transaction after reconcile to get updated state
-        matched = service.reconcile(uuid.UUID(transaction_id))
+        result_status = service.reconcile(uuid.UUID(transaction_id))
+
+        if result_status == "ALREADY_PROCESSED":
+            return True
 
         # Re-read for event payload
         from app.modules.ingestion.models import Transaction as Txn
         txn = db.query(Txn).filter(Txn.id == uuid.UUID(transaction_id)).first()
         if not txn:
-            return matched
+            return False
 
         # Build event payload (picked up by notification worker)
         payload = {

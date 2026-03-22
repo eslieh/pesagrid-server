@@ -7,7 +7,7 @@ Case-insensitive keys, graceful fallback to empty string for missing vars.
 Supported variables:
     payer_name, amount_due, amount_paid, balance, due_date,
     account_no, description, collection_name, currency,
-    psp_ref, transaction_date, phone
+    psp_ref, transaction_date, phone, paybill, shortcode
 """
 import re
 from typing import Any, Dict

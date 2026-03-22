@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, Query, Request, HTTPException, BackgroundTasks, status
+from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
 from sqlalchemy.orm import Session
 import logging
 
@@ -12,8 +12,7 @@ from app.modules.ingestion.schema import (
     MpesaC2BCallback, MpesaSTKCallback,
 )
 from app.modules.ingestion.services import IngestionService
-from app.modules.ingestion.normalizers.mpesa import normalize_c2b, normalize_stk
-from app.modules.ingestion.reconciliation import reconcile_transaction
+from app.rabbitmq import BasePublisher, EventType, Priority
 
 logger = logging.getLogger(__name__)
 
@@ -52,49 +51,38 @@ def get_authed_service(
 async def mpesa_callback(
     collection_id: uuid.UUID,
     request: Request,
-    background_tasks: BackgroundTasks,
-    service: IngestionService = Depends(get_ingestion_service),
 ):
     """
     Safaricom fires this URL for C2B (paybill) and STK push results.
 
-    **Always returns HTTP 200 immediately** — Safaricom expects instant ACK.
-    Ingestion and reconciliation run as background tasks after the response
-    is sent, so PSP retries are never triggered by processing latency.
+    **Always returns HTTP 200 immediately** — no DB writes, no processing.
+    The raw payload is published to RabbitMQ and the worker picks it up
+    asynchronously to normalize, ingest, and reconcile.
     """
-    # ── 1. Acknowledge immediately ──────────────────────────────────────────
-    # Parse body first (must happen before returning)
+    # ── 1. Parse body ───────────────────────────────────────────────────────
     try:
         payload: Dict[str, Any] = await request.json()
     except Exception:
         logger.warning(f"M-PESA webhook received non-JSON body for collection {collection_id}")
         return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-    # ── 2. Normalize (fast, in-process) ────────────────────────────────────
-    if "Body" in payload and "stkCallback" in payload.get("Body", {}):
-        normalized = normalize_stk(payload)
-        if normalized is None:
-            return {"ResultCode": 0, "ResultDesc": "Payment not completed — acknowledged"}
-    elif "TransID" in payload:
-        normalized = normalize_c2b(payload)
-    else:
-        logger.warning(f"Unknown M-PESA payload for collection {collection_id}: {list(payload.keys())}")
-        return {"ResultCode": 0, "ResultDesc": "Unrecognised shape — acknowledged"}
+    # ── 2. Publish raw payload to worker ────────────────────────────────────
+    try:
+        publisher = BasePublisher(service_name="ingest-gateway")
+        await publisher.publish_event(
+            event_type=EventType.WEBHOOK_MPESA,
+            payload={
+                "collection_id": str(collection_id),
+                "raw": payload,
+            },
+            priority=Priority.HIGH,
+        )
+    except Exception as e:
+        # Log but still ACK — never let Safaricom retry aggressively
+        logger.error(f"Failed to queue M-PESA callback for {collection_id}: {e}")
 
-    # ── 3. Store transaction synchronously (fast DB write) ──────────────────
-    # We need the transaction_id before returning so the worker can find it.
-    txn, is_new = await service.ingest_normalized(normalized, psp_type="mpesa")
-
-    # ── 4. Fire reconciliation as a background task ─────────────────────────
-    # This runs AFTER the HTTP response is sent to Safaricom.
-    if is_new:
-        background_tasks.add_task(reconcile_transaction, str(txn.id))
-
-    # ── 5. Return ACK immediately ────────────────────────────────────────────
-    return {
-        "ResultCode": 0,
-        "ResultDesc": "Accepted",
-    }
+    # ── 3. Acknowledge immediately ───────────────────────────────────────────
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

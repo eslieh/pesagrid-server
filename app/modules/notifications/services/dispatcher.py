@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 _EVENT_TO_TEMPLATE_TYPE = {
     "obligation.created":  TemplateType.PAYMENT_REMINDER,
     "obligation.due":      TemplateType.PAYMENT_REMINDER,
-    "payment.matched":     TemplateType.PAYMENT_RECEIPT,
-    "payment.partial":     TemplateType.PAYMENT_RECEIPT,
+    "payment.matched":     TemplateType.PAYMENT_RECEIPT_FULL,  # fully settled
+    "payment.partial":     TemplateType.PAYMENT_RECEIPT,       # still owes a balance
     "payment.unmatched":   TemplateType.CUSTOM,
     "auth.welcome":        TemplateType.CUSTOM,
     "auth.password_reset": TemplateType.CUSTOM,
@@ -71,6 +71,23 @@ class NotificationDispatcher:
             )
         except Exception:
             return None
+
+    def _get_paybill(self, collection_id: uuid.UUID) -> str:
+        """Fetch the active M-PESA paybill or shortcode for this tenant."""
+        try:
+            from app.modules.accounts.models import PSPConfig, PSPType
+            config = (
+                self.db.query(PSPConfig)
+                .filter(
+                    PSPConfig.collection_id == collection_id,
+                    PSPConfig.psp_type == PSPType.MPESA,
+                    PSPConfig.is_active == True
+                )
+                .first()
+            )
+            return config.paybill if config and config.paybill else ""
+        except Exception:
+            return ""
 
     def _resolve_template(
         self,
@@ -155,6 +172,10 @@ class NotificationDispatcher:
         email_domain_or_addr = (profile.email_from if profile else None) or settings.RESEND_FROM_EMAIL
         is_platform_email = event_type.startswith("auth.")  # auth emails come from PesaGrid, not the business
         email_from  = _build_from_email(sender_name, email_domain_or_addr, platform=is_platform_email)
+
+        # Inject paybill / shortcode from PSPConfig so templates can include payment routing details
+        paybill = self._get_paybill(collection_id)
+        context = {**context, "paybill": paybill, "shortcode": paybill}
 
         # ── SMS ───────────────────────────────────────────────────────────────
         if phone:

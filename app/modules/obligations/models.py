@@ -47,11 +47,12 @@ class TemplateChannel(str, Enum):
 
 
 class TemplateType(str, Enum):
-    PAYMENT_REMINDER = "payment_reminder"   # e.g. "Hi {{payer_name}}, your rent is due"
-    OVERDUE_NOTICE   = "overdue_notice"     # late payment notice
-    PAYMENT_RECEIPT  = "payment_receipt"    # "We received KSh 12,000 from you"
-    STATEMENT        = "statement"          # monthly/term statement
-    CUSTOM           = "custom"
+    PAYMENT_REMINDER     = "payment_reminder"    # e.g. "Hi {{payer_name}}, your rent is due"
+    OVERDUE_NOTICE       = "overdue_notice"      # late payment notice
+    PAYMENT_RECEIPT      = "payment_receipt"     # partial payment — still has a balance
+    PAYMENT_RECEIPT_FULL = "payment_receipt_full"  # full payment — obligation fully settled
+    STATEMENT            = "statement"           # monthly/term statement
+    CUSTOM               = "custom"
 
 
 # ─── PayerGroup — organises payers into logical cohorts ───────────────────────
@@ -225,7 +226,8 @@ class NotificationTemplate(Base):
     notifications. Supports variable substitution using {{variable}} syntax.
 
     Available variables: {{payer_name}}, {{amount_due}}, {{amount_paid}},
-    {{balance}}, {{due_date}}, {{account_no}}, {{collection_name}}, {{description}}
+    {{balance}}, {{due_date}}, {{account_no}}, {{collection_name}}, {{description}},
+    {{paybill}}, {{shortcode}}
     """
     __tablename__ = "notification_templates"
 

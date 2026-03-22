@@ -142,7 +142,7 @@ class RecurringConfigResponse(BaseModel):
 
 class ObligationCreate(BaseModel):
     payer_id:     uuid.UUID
-    account_no:   str
+    account_no:   Optional[str] = None
     description:  Optional[str]  = None
     amount_due:   float
     currency:     str            = "KES"

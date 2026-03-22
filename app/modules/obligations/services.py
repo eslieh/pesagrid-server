@@ -219,21 +219,34 @@ class ObligationService:
             )
 
         # Validate payer belongs to this collection
-        self._get_payer_or_404(data.payer_id)
+        payer = self._get_payer_or_404(data.payer_id)
+        
+        # Auto-inherit account_no
+        account_no = data.account_no or payer.account_no
+        if not account_no:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="account_no is required (either on Payer or Obligation payload)"
+            )
+            
+        # Auto-inherit due_date for recurring setups
+        due_date = data.due_date
+        if not due_date and data.is_recurring and data.recurring:
+            due_date = data.recurring.start_date
 
         obligation = Obligation(
             collection_id=self.collection_id,
             payer_id=data.payer_id,
-            account_no=data.account_no,
+            account_no=account_no,
             description=data.description,
             amount_due=data.amount_due,
             amount_paid=0,
             balance=data.amount_due,
             currency=data.currency,
-            due_date=data.due_date,
+            due_date=due_date,
             is_recurring=data.is_recurring,
             status=ObligationStatus.PENDING,
-            meta=data.meta,
+            meta=data.meta or {},
             created_by=self.current_user_id,
         )
         self.db.add(obligation)
@@ -346,8 +359,14 @@ class ObligationService:
         ob = self._get_obligation_or_404(obligation_id)
         if ob.status == ObligationStatus.CANCELLED:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Obligation already cancelled")
+        
         ob.status = ObligationStatus.CANCELLED
         ob.updated_at = datetime.utcnow()
+        
+        # Stop future invoices if this was a recurring obligation setup
+        if ob.recurring_config:
+            ob.recurring_config.auto_generate = False
+            
         self.db.commit()
         self.db.refresh(ob)
         return ob
