@@ -17,6 +17,14 @@ import signal
 
 from app.rabbitmq import BaseConsumer, MessageEnvelope, EventType
 
+# Warmup: ensure all models are registered in Base.metadata for foreign key resolution
+import app.modules.auth.models
+import app.modules.ingestion.models
+import app.modules.obligations.models
+import app.modules.accounts.models
+import app.modules.notifications.models
+
+
 # ─── Handler imports ───────────────────────────────────────────────────────────
 from app.modules.ingestion.handlers import (
     handle_webhook_mpesa,

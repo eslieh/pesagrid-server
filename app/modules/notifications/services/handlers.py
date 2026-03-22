@@ -40,11 +40,13 @@ async def _dispatch(event_type: str, payload: dict) -> None:
             currency=payload.get("currency", "KES"),
             psp_ref=payload.get("psp_ref", ""),
             transaction_date=payload.get("ingested_at", ""),
+            settled_by=payload.get("psp_type", ""),
             phone=phone or "",
             login_url=payload.get("login_url", ""),
             otp=payload.get("otp", ""),
             reset_url=payload.get("reset_url", ""),
         )
+
 
         await dispatcher.dispatch(
             event_type=event_type,

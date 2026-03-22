@@ -9,14 +9,27 @@ Supported variables:
     account_no, description, collection_name, currency,
     psp_ref, transaction_date, phone, paybill, shortcode
 """
-import re
+from datetime import datetime
 from typing import Any, Dict
+import re
 
 
 _PATTERN = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
 
+def _format_date(date_str: str) -> str:
+    """Try to parse an ISO date string and return a human-readable version."""
+    if not date_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        return dt.strftime("%d %b %Y, %H:%M")
+    except (ValueError, TypeError):
+        return date_str
+
+
 def render(template: str, context: Dict[str, Any]) -> str:
+
     """
     Render a template string by substituting {{variable}} placeholders.
 
@@ -43,6 +56,7 @@ def build_context(
     currency: str = "KES",
     psp_ref: str = "",
     transaction_date: str = "",
+    settled_by: str = "",
     phone: str = "",
     **extra,
 ) -> Dict[str, Any]:
@@ -55,14 +69,17 @@ def build_context(
         "amount_due":       f"{amount_due:,.2f}",
         "amount_paid":      f"{amount_paid:,.2f}",
         "balance":          f"{balance:,.2f}",
-        "due_date":         due_date,
+        "due_date":         _format_date(due_date),
         "account_no":       account_no,
         "description":      description,
         "collection_name":  collection_name,
         "currency":         currency,
         "psp_ref":          psp_ref,
-        "transaction_date": transaction_date,
+        "transaction_date": _format_date(transaction_date),
+        "settled_by":       settled_by,
         "phone":            phone,
     }
+
+
     ctx.update(extra)
     return ctx

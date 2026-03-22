@@ -154,6 +154,9 @@ class ReconciliationService:
             logger.info(f"📁 Fleet Matched: txn {txn.id} → CP {cp.name}")
             return "CATEGORIZED"
 
+
+
+
         # 2. Invoicing Path: Try to find a specific Obligation
         payer = self._find_payer(collection_id, account_no)
         if payer:
@@ -214,9 +217,11 @@ async def reconcile_transaction(transaction_id: str):
             "currency":          txn.currency,
             "phone":             txn.phone or "",
             "payer_name":        txn.payer_name or "",
+            "psp_type":          txn.psp_type or "",
             "psp_ref":           txn.psp_ref or "",
             "ingested_at":       txn.ingested_at.isoformat() if txn.ingested_at else "",
         }
+
 
         if txn.matched_obligation_id:
             from app.modules.obligations.models import Obligation as Ob, Payer as P
@@ -230,7 +235,9 @@ async def reconcile_transaction(transaction_id: str):
                     "balance":        float(ob.balance),
                     "description":    ob.description or "",
                     "obligation_status": ob.status.value,
+                    "due_date":          ob.due_date.isoformat() if ob.due_date else "",
                 })
+
             if payer:
                 payload.update({
                     "payer_id":   str(payer.id),

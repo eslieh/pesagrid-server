@@ -79,8 +79,10 @@ async def login(
     )
     
     return AuthResponse(
-        user=user
+        user=user,
+        tokens=tokens
     )
+
 
 @auth_router.post("/logout", response_model=LogoutResponse)
 async def logout(
