@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # Notifications — Resend (email)
     RESEND_API_KEY:   str = os.getenv("RESEND_API_KEY", "")
-    RESEND_FROM_EMAIL: str = os.getenv("RESEND_FROM_EMAIL", "mails.ryfty.net")
+    RESEND_FROM_EMAIL: str = os.getenv("RESEND_FROM_EMAIL", "pesagrid@mails.ryfty.net")
 
     # Notifications — Hostpinnacle (SMS)
     SMS_USER_ID:   str = os.getenv("SMS_USER_ID", "")
