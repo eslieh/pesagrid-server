@@ -1,4 +1,4 @@
-name: Deploy to VPS
+name: Deploy pesagrid-server
 
 on:
   push:
@@ -9,16 +9,24 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
+      # Force GitHub Actions to use Node.js 24 for JavaScript actions
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
 
-    - name: Copy and run deploy script on VPS
-      uses: appleboy/ssh-action@v0.1.7
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: root
-        key: ${{ secrets.VPS_SSH_KEY }}
-        script: |
-          /root/deploy-pesagrid.sh
+    steps:
+      # 1️⃣ Checkout your repo
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2️⃣ Deploy to VPS via SSH
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # Optional: set strict host key checking to no for first-time deploy
+          # strict: false
+          script: |
+            echo "Starting deployment..."
+            /root/deploy-pesagrid.sh
+            echo "Deployment finished."
