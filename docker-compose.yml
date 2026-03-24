@@ -1,0 +1,42 @@
+services:
+
+  pesagrid-redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
+  pesagrid-rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  pesagrid-api:
+    build: .
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://pesagrid-redis:6379/0
+      RABBITMQ_CONNECTION_STRING: amqp://guest:guest@pesagrid-rabbitmq:5672/
+    depends_on:
+      - pesagrid-redis
+      - pesagrid-rabbitmq
+    # command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  pesagrid-worker:
+    build: .
+    restart: always
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://pesagrid-redis:6379/0
+      RABBITMQ_CONNECTION_STRING: amqp://guest:guest@pesagrid-rabbitmq:5672/
+    depends_on:
+      - pesagrid-redis
+      - pesagrid-rabbitmq
+    command: python worker.py

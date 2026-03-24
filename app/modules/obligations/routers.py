@@ -1,0 +1,415 @@
+import uuid
+from typing import Optional, List
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy.orm import Session
+
+from app.core.dependancies import get_current_verified_user, get_db
+from app.modules.auth.models import User
+from app.modules.obligations.models import ObligationStatus, TemplateType, TemplateChannel
+from app.modules.obligations.schema import (
+    # Groups
+    PayerGroupCreate, PayerGroupUpdate, PayerGroupResponse,
+    # Payers
+    PayerCreate, PayerUpdate, PayerResponse, PayerListResponse,
+    # Obligations
+    ObligationCreate, ObligationUpdate, ObligationResponse, ObligationListResponse,
+    RecurringConfigUpdate,
+    # Templates
+    NotificationTemplateCreate, NotificationTemplateUpdate,
+    NotificationTemplateResponse, NotificationTemplateListResponse,
+)
+from app.modules.obligations.services import ObligationService
+
+obligations_router = APIRouter(tags=["Obligations"])
+
+
+def get_service(
+    current_user: User = Depends(get_current_verified_user),
+    db: Session = Depends(get_db),
+) -> ObligationService:
+    """
+    ObligationService scoped to the authenticated user's collection.
+    In MVP: collection_id == user.id (one workspace per user).
+    Swap this dependency later when multi-workspace teams are added.
+    """
+    return ObligationService(
+        db=db,
+        collection_id=current_user.id,
+        current_user_id=current_user.id,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PAYER GROUPS  —  /groups
+# ══════════════════════════════════════════════════════════════════════════════
+
+@obligations_router.post(
+    "/groups",
+    response_model=PayerGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create payer group",
+)
+async def create_group(
+    data: PayerGroupCreate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Create a named cohort of payers.
+
+    Examples:
+    - Rental → `{name: "Block A", group_type: "apartment_block"}`
+    - School  → `{name: "Grade 7", group_type: "school_class"}`
+    - SACCO   → `{name: "Route 12", group_type: "bus_route"}`
+
+    Use the `meta` field to attach any extra data your business needs
+    without requiring a schema change.
+    """
+    return await service.create_group(data)
+
+
+@obligations_router.get(
+    "/groups",
+    response_model=List[PayerGroupResponse],
+    summary="List payer groups",
+)
+async def list_groups(
+    skip:  int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    service: ObligationService = Depends(get_service),
+):
+    _, items = await service.list_groups(skip=skip, limit=limit)
+    return items
+
+
+@obligations_router.get(
+    "/groups/{group_id}",
+    response_model=PayerGroupResponse,
+    summary="Get payer group",
+)
+async def get_group(
+    group_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.get_group(group_id)
+
+
+@obligations_router.patch(
+    "/groups/{group_id}",
+    response_model=PayerGroupResponse,
+    summary="Update payer group",
+)
+async def update_group(
+    group_id: uuid.UUID,
+    data: PayerGroupUpdate,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.update_group(group_id, data)
+
+
+@obligations_router.delete(
+    "/groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete payer group",
+)
+async def delete_group(
+    group_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    await service.delete_group(group_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PAYERS  —  /payers
+# ══════════════════════════════════════════════════════════════════════════════
+
+@obligations_router.post(
+    "/payers",
+    response_model=PayerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create payer",
+)
+async def create_payer(
+    data: PayerCreate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Register an individual payer (tenant, student, bus, retailer, member…).
+
+    - `account_no` — the M-PESA sub-account they pay to (e.g. `UNIT-3B`)
+    - `identifier` — any business-specific ID (student no, member no, meter no)
+    - `group_id`   — optional group this payer belongs to
+    - `meta`       — any extra fields your business needs, e.g.
+      `{"grade": "7A", "guardian": "Jane Doe", "credit_limit": 50000}`
+    """
+    return await service.create_payer(data)
+
+
+@obligations_router.get(
+    "/payers",
+    response_model=PayerListResponse,
+    summary="List payers",
+)
+async def list_payers(
+    group_id:  Optional[uuid.UUID] = Query(None, description="Filter by group"),
+    is_active: Optional[bool]      = Query(None, description="Filter active/inactive payers"),
+    skip:      int                 = Query(0, ge=0),
+    limit:     int                 = Query(100, ge=1, le=500),
+    service: ObligationService = Depends(get_service),
+):
+    total, items = await service.list_payers(group_id=group_id, is_active=is_active, skip=skip, limit=limit)
+    return PayerListResponse(total=total, items=items)
+
+
+@obligations_router.get(
+    "/payers/{payer_id}",
+    response_model=PayerResponse,
+    summary="Get payer",
+)
+async def get_payer(
+    payer_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.get_payer(payer_id)
+
+
+@obligations_router.patch(
+    "/payers/{payer_id}",
+    response_model=PayerResponse,
+    summary="Update payer",
+)
+async def update_payer(
+    payer_id: uuid.UUID,
+    data: PayerUpdate,
+    service: ObligationService = Depends(get_service),
+):
+    """Partial update — only fields you send are changed."""
+    return await service.update_payer(payer_id, data)
+
+
+@obligations_router.delete(
+    "/payers/{payer_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete payer",
+)
+async def delete_payer(
+    payer_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    """Blocked if payer has open (pending/partial/overdue) obligations."""
+    await service.delete_payer(payer_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OBLIGATIONS  —  /
+# ══════════════════════════════════════════════════════════════════════════════
+
+@obligations_router.post(
+    "/",
+    response_model=ObligationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create obligation",
+)
+async def create_obligation(
+    data: ObligationCreate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Create a payment obligation for a payer.
+
+    **One-off**: set `due_date`, leave `is_recurring=false`.
+
+    **Recurring** (rent, bus fare, school fees, chama contributions):
+    set `is_recurring=true` and include a `recurring` block:
+    ```json
+    {
+      "recurrence_type": "monthly",
+      "day_of_month": 1,
+      "start_date": "2025-04-01T00:00:00",
+      "grace_period_days": 5
+    }
+    ```
+
+    Use `meta` for any custom fields:
+    ```json
+    {"invoice_no": "INV-001", "term": "Term 1 2025", "penalty_rate": 0.05}
+    ```
+    """
+    return await service.create_obligation(data)
+
+
+@obligations_router.get(
+    "/",
+    response_model=ObligationListResponse,
+    summary="List obligations",
+)
+async def list_obligations(
+    payer_id:     Optional[uuid.UUID]       = Query(None, description="Filter by payer"),
+    account_no:   Optional[str]             = Query(None, description="Filter by account number"),
+    status_filter: Optional[ObligationStatus] = Query(None, alias="status"),
+    is_recurring: Optional[bool]            = Query(None),
+    skip:         int                       = Query(0, ge=0),
+    limit:        int                       = Query(50, ge=1, le=200),
+    service: ObligationService = Depends(get_service),
+):
+    total, items = await service.list_obligations(
+        payer_id=payer_id,
+        account_no=account_no,
+        ob_status=status_filter,
+        is_recurring=is_recurring,
+        skip=skip,
+        limit=limit,
+    )
+    return ObligationListResponse(total=total, items=items)
+
+
+@obligations_router.get(
+    "/{obligation_id}",
+    response_model=ObligationResponse,
+    summary="Get obligation",
+)
+async def get_obligation(
+    obligation_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.get_obligation(obligation_id)
+
+
+@obligations_router.patch(
+    "/{obligation_id}",
+    response_model=ObligationResponse,
+    summary="Update obligation",
+)
+async def update_obligation(
+    obligation_id: uuid.UUID,
+    data: ObligationUpdate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Partially update an obligation. You can adjust `amount_due` if the
+    requirement changes (reviewed rent, revised invoice, etc.) — the
+    `balance` recalculates automatically.
+    """
+    return await service.update_obligation(obligation_id, data)
+
+
+@obligations_router.patch(
+    "/{obligation_id}/recurring",
+    response_model=ObligationResponse,
+    summary="Update recurring schedule",
+)
+async def update_recurring_config(
+    obligation_id: uuid.UUID,
+    data: RecurringConfigUpdate,
+    service: ObligationService = Depends(get_service),
+):
+    """Adjust grace period, end date, or next_due_date for a recurring obligation."""
+    return await service.update_recurring_config(obligation_id, data)
+
+
+@obligations_router.post(
+    "/{obligation_id}/cancel",
+    response_model=ObligationResponse,
+    summary="Cancel obligation",
+)
+async def cancel_obligation(
+    obligation_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    """Soft-cancel — record is preserved for audit."""
+    return await service.cancel_obligation(obligation_id)
+
+
+@obligations_router.delete(
+    "/{obligation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete obligation",
+)
+async def delete_obligation(
+    obligation_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    """Hard delete. Blocked on fully paid obligations — cancel those instead."""
+    await service.delete_obligation(obligation_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  NOTIFICATION TEMPLATES  —  /templates
+# ══════════════════════════════════════════════════════════════════════════════
+
+@obligations_router.post(
+    "/templates",
+    response_model=NotificationTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create notification template",
+)
+async def create_template(
+    data: NotificationTemplateCreate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Create a reusable message template for automated notifications.
+
+    Supported variables in `body` / `subject`:
+    `{{payer_name}}`, `{{amount_due}}`, `{{amount_paid}}`, `{{balance}}`,
+    `{{due_date}}`, `{{account_no}}`, `{{collection_name}}`, `{{description}}`
+
+    Example WhatsApp rent reminder:
+    ```
+    Hi {{payer_name}}, your rent of KSh {{amount_due}} for {{account_no}}
+    is due on {{due_date}}. Balance: KSh {{balance}}. Pay via Paybill 123456.
+    ```
+    """
+    return await service.create_template(data)
+
+
+@obligations_router.get(
+    "/templates",
+    response_model=NotificationTemplateListResponse,
+    summary="List notification templates",
+)
+async def list_templates(
+    template_type: Optional[TemplateType]    = Query(None, alias="type"),
+    channel:       Optional[TemplateChannel] = Query(None),
+    skip:          int                       = Query(0, ge=0),
+    limit:         int                       = Query(50, ge=1, le=200),
+    service: ObligationService = Depends(get_service),
+):
+    total, items = await service.list_templates(template_type=template_type, channel=channel, skip=skip, limit=limit)
+    return NotificationTemplateListResponse(total=total, items=items)
+
+
+@obligations_router.get(
+    "/templates/{template_id}",
+    response_model=NotificationTemplateResponse,
+    summary="Get template",
+)
+async def get_template(
+    template_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.get_template(template_id)
+
+
+@obligations_router.patch(
+    "/templates/{template_id}",
+    response_model=NotificationTemplateResponse,
+    summary="Update template",
+)
+async def update_template(
+    template_id: uuid.UUID,
+    data: NotificationTemplateUpdate,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.update_template(template_id, data)
+
+
+@obligations_router.delete(
+    "/templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete template",
+)
+async def delete_template(
+    template_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    await service.delete_template(template_id)
