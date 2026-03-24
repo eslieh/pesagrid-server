@@ -45,15 +45,21 @@ _EVENT_TO_TEMPLATE_TYPE = {
 def _build_from_email(display_name: str, domain_or_email: str, platform: bool = False) -> str:
     """
     Build a Resend-compatible from address.
-
-    - platform=True  (auth emails from us)  → pesagrid@mails.ryfty.net
-    - platform=False (biz → payer emails)   → skyview-apts@mails.ryfty.net
-    - domain_or_email contains '@'          → use it as-is
+    Format: "Display Name <email@domain.com>"
     """
+    # 1. Resolve the email address pool
+    # If it's already a full email, use it. If it's just a domain, build one.
     if "@" in domain_or_email:
-        return domain_or_email
-    prefix = "pesagrid" if platform else display_name.lower().strip().replace(" ", "-")[:30]
-    return f"{prefix}@{domain_or_email}"
+        email_addr = domain_or_email
+    else:
+        prefix = "pesagrid" if platform else display_name.lower().strip().replace(" ", "-")[:30]
+        # Clean up prefix to be valid local part
+        import re
+        prefix = re.sub(r'[^a-zA-Z0-9.\-_]', '', prefix) or "info"
+        email_addr = f"{prefix}@{domain_or_email}"
+
+    # 2. Return as "Name <email>"
+    return f"{display_name} <{email_addr}>"
 
 
 class NotificationDispatcher:
@@ -167,11 +173,15 @@ class NotificationDispatcher:
             return
 
         profile = self._get_business_profile(collection_id)
-        sms_sender  = settings.SMS_SENDER_ID
-        sender_name = (profile.display_name  if profile else None) or "PesaGrid"
-        email_domain_or_addr = (profile.email_from if profile else None) or settings.RESEND_FROM_EMAIL
-        is_platform_email = event_type.startswith("auth.")  # auth emails come from PesaGrid, not the business
-        email_from  = _build_from_email(sender_name, email_domain_or_addr, platform=is_platform_email)
+        sender_name = (profile.display_name if profile and profile.display_name else "PesaGrid")
+        email_domain_or_addr = (profile.email_from if profile and profile.email_from else settings.RESEND_FROM_EMAIL)
+        
+        # Ensure we don't have an empty domain
+        if not email_domain_or_addr:
+            email_domain_or_addr = "mails.ryfty.net"
+
+        is_platform_email = event_type.startswith("auth.")
+        email_from = _build_from_email(sender_name, email_domain_or_addr, platform=is_platform_email)
 
         # Inject paybill / shortcode from PSPConfig so templates can include payment routing details
         paybill = self._get_paybill(collection_id)
