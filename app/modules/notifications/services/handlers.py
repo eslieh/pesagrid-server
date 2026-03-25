@@ -68,6 +68,7 @@ async def _notify_business(event_type: str, payload: dict) -> None:
     from app.modules.accounts.models import BusinessProfile
     from app.modules.notifications.services.send_email import send_email
     from app.modules.notifications.services.send_sms import send_sms
+    from app.modules.notifications.services.renderer import wrap_in_template
     import uuid
 
     db = SessionLocal()
@@ -95,8 +96,13 @@ async def _notify_business(event_type: str, payload: dict) -> None:
 
         if "email" in channels and profile.email:
             try:
-                # Assuming send_email(to, subject, html_body)
-                await send_email(profile.email, subject, message_body)
+                # Always send platform-to-business notifications from PesaGrid
+                from app.modules.notifications.services.dispatcher import _build_from_email
+                from app.core.config import settings
+                email_from = _build_from_email("PesaGrid", settings.RESEND_FROM_EMAIL or "mails.ryfty.net", platform=True)
+
+                wrapped_body = wrap_in_template(message_body, business_name="PesaGrid")
+                await send_email(profile.email, subject, wrapped_body, from_email=email_from)
                 logger.info(f"📧 Sent payment notification email to business {profile.email}")
             except Exception as e:
                 logger.error(f"Failed to email business {profile.email}: {e}")
@@ -141,3 +147,8 @@ async def handle_obligation_created(envelope: MessageEnvelope) -> None:
 async def handle_obligation_due(envelope: MessageEnvelope) -> None:
     logger.info("⏱️ obligation.due — sending payment reminder to payer")
     await _dispatch("obligation.due", envelope.payload)
+
+
+async def handle_obligation_cancelled(envelope: MessageEnvelope) -> None:
+    logger.info("🗑️ obligation.cancelled — notifying payer of cancellation")
+    await _dispatch("obligation.cancelled", envelope.payload)

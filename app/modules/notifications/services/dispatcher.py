@@ -21,7 +21,7 @@ from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.modules.notifications.models import NotificationLog, NotifChannel, NotifStatus
-from app.modules.notifications.services.renderer import render
+from app.modules.notifications.services.renderer import render, wrap_in_template
 from app.modules.notifications.services.send_sms import send_sms
 from app.modules.notifications.services.send_email import send_email
 from app.modules.obligations.models import NotificationTemplate, TemplateType
@@ -32,8 +32,9 @@ logger = logging.getLogger(__name__)
 
 # Maps event string → TemplateType for template lookup
 _EVENT_TO_TEMPLATE_TYPE = {
-    "obligation.created":  TemplateType.PAYMENT_REMINDER,
+    "obligation.created":  TemplateType.OBLIGATION_CREATED,
     "obligation.due":      TemplateType.PAYMENT_REMINDER,
+    "obligation.cancelled": TemplateType.OBLIGATION_CANCELLED,
     "payment.matched":     TemplateType.PAYMENT_RECEIPT_FULL,  # fully settled
     "payment.partial":     TemplateType.PAYMENT_RECEIPT,       # still owes a balance
     "payment.unmatched":   TemplateType.CUSTOM,
@@ -52,6 +53,11 @@ def _build_from_email(display_name: str, domain_or_email: str, platform: bool = 
     if "@" in domain_or_email:
         email_addr = domain_or_email
     else:
+        # Hardness check: if the domain is missing a dot, it's invalid for Resend.
+        # Fallback to settings.RESEND_FROM_EMAIL's domain.
+        if "." not in domain_or_email:
+            domain_or_email = settings.RESEND_FROM_EMAIL.split("@")[-1] if "@" in settings.RESEND_FROM_EMAIL else "mails.ryfty.net"
+
         prefix = "pesagrid" if platform else display_name.lower().strip().replace(" ", "-")[:30]
         # Clean up prefix to be valid local part
         import re
@@ -102,26 +108,48 @@ class NotificationDispatcher:
         channel: str,
     ) -> Tuple[Optional[str], Optional[str], Optional[uuid.UUID]]:
         """
-        Look up the tenant's NotificationTemplate for this event + channel.
-        Returns (body, subject, template_id) or (None, None, None).
-        No hardcoded fallbacks — business is fully in control.
+        Look up the tenant's NotificationTemplate.
+        1. Try channel-specific default (e.g., EMAIL + is_default=True)
+        2. Try 'ALL' channel default (ALL + is_default=True)
+        3. Try any channel-specific match
+        4. Try any 'ALL' channel match
         """
         tmpl_type = _EVENT_TO_TEMPLATE_TYPE.get(event_type)
+        if not tmpl_type:
+            return None, None, None
+
         q = self.db.query(NotificationTemplate).filter(
             NotificationTemplate.collection_id == collection_id,
-            NotificationTemplate.channel == channel.upper(),
+            NotificationTemplate.template_type == tmpl_type,
             NotificationTemplate.is_active.is_(True),
         )
-        if tmpl_type:
-            exact = q.filter(
-                NotificationTemplate.template_type == tmpl_type,
-                NotificationTemplate.is_default.is_(True),
-            ).first()
-            if exact:
-                return exact.body, getattr(exact, "subject", None), exact.id
-            any_match = q.filter(NotificationTemplate.template_type == tmpl_type).first()
-            if any_match:
-                return any_match.body, getattr(any_match, "subject", None), any_match.id
+
+        # 1. Channel-specific default
+        exact = q.filter(
+            NotificationTemplate.channel == channel.upper(),
+            NotificationTemplate.is_default.is_(True),
+        ).first()
+        if exact:
+            return exact.body, getattr(exact, "subject", None), exact.id
+
+        # 2. 'ALL' channel default
+        any_chan = q.filter(
+            NotificationTemplate.channel == 'ALL',
+            NotificationTemplate.is_default.is_(True),
+        ).first()
+        if any_chan:
+            return any_chan.body, getattr(any_chan, "subject", None), any_chan.id
+
+        # 3. Any channel-specific match
+        any_match = q.filter(NotificationTemplate.channel == channel.upper()).first()
+        if any_match:
+            return any_match.body, getattr(any_match, "subject", None), any_match.id
+
+        # 4. Any 'ALL' channel match
+        any_all = q.filter(NotificationTemplate.channel == 'ALL').first()
+        if any_all:
+            return any_all.body, getattr(any_all, "subject", None), any_all.id
+
         return None, None, None
 
     def _log(
@@ -173,14 +201,20 @@ class NotificationDispatcher:
             return
 
         profile = self._get_business_profile(collection_id)
-        sender_name = (profile.display_name if profile and profile.display_name else "PesaGrid")
+        is_platform_email = event_type.startswith("auth.")
+        
+        # Override sender identity for platform emails vs business emails
+        if is_platform_email:
+            sender_name = "PesaGrid"
+        else:
+            sender_name = (profile.display_name or profile.business_name or "PesaGrid") if profile else "PesaGrid"
+
         email_domain_or_addr = (profile.email_from if profile and profile.email_from else settings.RESEND_FROM_EMAIL)
         
         # Ensure we don't have an empty domain
         if not email_domain_or_addr:
             email_domain_or_addr = "mails.ryfty.net"
 
-        is_platform_email = event_type.startswith("auth.")
         email_from = _build_from_email(sender_name, email_domain_or_addr, platform=is_platform_email)
 
         # Inject paybill / shortcode from PSPConfig so templates can include payment routing details
@@ -219,6 +253,7 @@ class NotificationDispatcher:
                           error_msg="No template configured")
             else:
                 rendered      = render(body_tpl, {**context, "sender_name": sender_name})
+                rendered      = wrap_in_template(rendered, business_name=sender_name)
                 final_subject = (
                     email_subject
                     or (render(subject, context) if subject else event_type.replace(".", " ").title())

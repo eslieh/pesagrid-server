@@ -44,6 +44,7 @@ class TemplateChannel(str, Enum):
     SMS       = "sms"
     WHATSAPP  = "whatsapp"
     EMAIL     = "email"
+    ALL       = "all"
 
 
 class TemplateType(str, Enum):
@@ -51,6 +52,8 @@ class TemplateType(str, Enum):
     OVERDUE_NOTICE       = "overdue_notice"      # late payment notice
     PAYMENT_RECEIPT      = "payment_receipt"     # partial payment — still has a balance
     PAYMENT_RECEIPT_FULL = "payment_receipt_full"  # full payment — obligation fully settled
+    OBLIGATION_CREATED   = "obligation_created"  # new bill created
+    OBLIGATION_CANCELLED = "obligation_cancelled"  # bill cancelled/removed
     STATEMENT            = "statement"           # monthly/term statement
     CUSTOM               = "custom"
 

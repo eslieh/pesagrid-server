@@ -10,6 +10,7 @@ from app.rabbitmq import MessageEnvelope
 from app.core.config import settings
 from app.modules.notifications.services.send_sms import send_sms
 from app.modules.notifications.services.send_email import send_email
+from app.modules.notifications.services.renderer import wrap_in_template
 from app.modules.notifications.services.dispatcher import _build_from_email
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ async def _send_auth_notification(
     email = payload.get("email")
     phone = payload.get("phone")
     auth_type = payload.get("auth_type")
-    from_email = _build_from_email("pesagrid", settings.RESEND_FROM_EMAIL, platform=True)
+    from_email = _build_from_email("PesaGrid", settings.RESEND_FROM_EMAIL, platform=True)
 
     sent = False
     if auth_type == "phone" and phone:
@@ -37,7 +38,8 @@ async def _send_auth_notification(
 
     if auth_type == "email" and email:
         try:
-            await send_email(email, subject, html_body, from_email=from_email)
+            wrapped_body = wrap_in_template(html_body, business_name="PesaGrid")
+            await send_email(email, subject, wrapped_body, from_email=from_email)
             sent = True
         except Exception as e:
             logger.warning(f"Email notify failed: {e}")
@@ -46,7 +48,8 @@ async def _send_auth_notification(
     if not sent:
         if email:
             try:
-                await send_email(email, subject, html_body, from_email=from_email)
+                wrapped_body = wrap_in_template(html_body, business_name="PesaGrid")
+                await send_email(email, subject, wrapped_body, from_email=from_email)
                 sent = True
             except Exception as e:
                 logger.warning(f"Fallback email failed: {e}")
@@ -68,7 +71,7 @@ async def handle_auth_welcome(envelope: MessageEnvelope) -> None:
     html_body = (
         f"<h2>Welcome to PesaGrid!</h2>"
         f"<p>Your account is almost ready. Verify it here:</p>"
-        f"<p><a href='{settings.CLIENT_URL}/auth/verify?token={token}'>Verify Account</a></p>"
+        f"<div style='margin: 24px 0;'><a href='{settings.CLIENT_URL}/auth/verify?token={token}' class='button-black'>Verify Account</a></div>"
         f"<p>Or use code: <strong>{token}</strong></p>"
         f"<p>This link expires in 24 hours.</p>"
     )
@@ -86,7 +89,7 @@ async def handle_auth_password_reset(envelope: MessageEnvelope) -> None:
     html_body = (
         f"<h2>Reset your password</h2>"
         f"<p>Click to set a new password: "
-        f"<a href='{settings.CLIENT_URL}/auth/reset-password?token={token}'>Reset Password</a></p>"
+        f"<div style='margin: 24px 0;'><a href='{settings.CLIENT_URL}/auth/reset-password?token={token}' class='button-black'>Reset Password</a></div>"
         f"<p>Or use code: <strong>{token}</strong></p>"
         f"<p>Expires in 1 hour. If you didn't request this, ignore this message.</p>"
     )

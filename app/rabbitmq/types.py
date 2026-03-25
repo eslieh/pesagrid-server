@@ -21,6 +21,7 @@ class EventType(str, Enum):
     # Obligations lifecycle
     OBLIGATION_CREATED = "obligation.created"
     OBLIGATION_DUE     = "obligation.due"     # scheduled reminder (future)
+    OBLIGATION_CANCELLED = "obligation.cancelled"
     # Auth
     AUTH_WELCOME        = "auth.welcome"
     AUTH_PASSWORD_RESET = "auth.password_reset"
