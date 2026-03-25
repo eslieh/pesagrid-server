@@ -80,8 +80,8 @@ class PayerGroup(Base):
     # Arbitrary tenant-defined fields: e.g. {"floor": 2, "block": "A", "capacity": 30}
     meta          = Column(JSONB, nullable=True, default=dict)
     created_by    = Column(UUID, nullable=False)
-    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
-    updated_at    = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
+    created_at    = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
+    updated_at    = Column(DateTime(timezone=True), default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     # Relationships
     payers = relationship("Payer", back_populates="group", cascade="all, delete-orphan")
@@ -118,8 +118,8 @@ class Payer(Base):
     # Tenant-defined custom fields: e.g. {"grade": "7A", "guardian": "John Doe", "credit_limit": 50000}
     meta          = Column(JSONB, nullable=True, default=dict)
     created_by    = Column(UUID, nullable=False)
-    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
-    updated_at    = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
+    created_at    = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
+    updated_at    = Column(DateTime(timezone=True), default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     # Relationships
     group       = relationship("PayerGroup", back_populates="payers")
@@ -157,14 +157,14 @@ class Obligation(Base):
     amount_paid    = Column(Numeric(18, 2), default=0, nullable=False)
     balance        = Column(Numeric(18, 2), default=0, nullable=False)
     currency       = Column(String(3), default="KES", nullable=False)
-    due_date       = Column(DateTime, nullable=True)
+    due_date       = Column(DateTime(timezone=True), nullable=True)
     status         = Column(SQLEnum(ObligationStatus), default=ObligationStatus.PENDING, nullable=False, index=True)
     is_recurring   = Column(Boolean, default=False, nullable=False, index=True)
     # Tenant-defined custom fields: e.g. {"invoice_no": "INV-001", "penalty": 500, "term": "Term 1 2025"}
     meta           = Column(JSONB, nullable=True, default=dict)
     created_by     = Column(UUID, nullable=False, index=True)
-    created_at     = Column(DateTime, default=now_nairobi, nullable=False)
-    updated_at     = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
+    created_at     = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
+    updated_at     = Column(DateTime(timezone=True), default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     # Relationships
     payer = relationship("Payer", back_populates="obligations")
@@ -205,12 +205,12 @@ class RecurringConfig(Base):
     interval_days     = Column(Integer, nullable=True)   # CUSTOM only
     day_of_month      = Column(Integer, nullable=True)   # 1-28, MONTHLY
     day_of_week       = Column(Integer, nullable=True)   # 0=Mon…6=Sun, WEEKLY
-    start_date        = Column(DateTime, nullable=False)
-    end_date          = Column(DateTime, nullable=True)
-    next_due_date     = Column(DateTime, nullable=True, index=True)
+    start_date        = Column(DateTime(timezone=True), nullable=False)
+    end_date          = Column(DateTime(timezone=True), nullable=True)
+    next_due_date     = Column(DateTime(timezone=True), nullable=True, index=True)
     grace_period_days = Column(Integer, default=0, nullable=False)
     auto_generate     = Column(Boolean, default=True, nullable=False)
-    created_at        = Column(DateTime, default=now_nairobi, nullable=False)
+    created_at        = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
 
     # Relationships
     obligation = relationship("Obligation", back_populates="recurring_config")
@@ -244,8 +244,8 @@ class NotificationTemplate(Base):
     is_active     = Column(Boolean, default=True, nullable=False)
     is_default    = Column(Boolean, default=False, nullable=False)           # default template for this type+channel
     created_by    = Column(UUID, nullable=False)
-    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
-    updated_at    = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
+    created_at    = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
+    updated_at    = Column(DateTime(timezone=True), default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     __table_args__ = (
         Index("idx_notif_templates_collection_type",    "collection_id", "template_type"),
