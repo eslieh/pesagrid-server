@@ -21,8 +21,15 @@ def _send_sync(
 ) -> dict:
     """Synchronous Resend send — runs in a thread pool from the async caller."""
     resend.api_key = settings.RESEND_API_KEY
+    from_val = from_email or settings.RESEND_FROM_EMAIL
+    
+    # If the from_val is just an email, wrap it in a default name for better deliverability
+    if from_val and "@" in from_val and "<" not in from_val:
+        from_val = f"PesaGrid <{from_val}>"
+        
+    logger.info(f"DEBUG: from_val='{from_val}'")
     params = {
-        "from": from_email or settings.RESEND_FROM_EMAIL,
+        "from": from_val,
         "to": [to],
         "subject": subject,
         "html": html_body,
