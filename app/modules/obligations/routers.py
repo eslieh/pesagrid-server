@@ -200,6 +200,89 @@ async def delete_payer(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  NOTIFICATION TEMPLATES  —  /templates
+# ══════════════════════════════════════════════════════════════════════════════
+
+@obligations_router.post(
+    "/templates",
+    response_model=NotificationTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create notification template",
+)
+async def create_template(
+    data: NotificationTemplateCreate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Create a reusable message template for automated notifications.
+
+    Supported variables in `body` / `subject`:
+    `{{payer_name}}`, `{{amount_due}}`, `{{amount_paid}}`, `{{balance}}`,
+    `{{due_date}}`, `{{account_no}}`, `{{collection_name}}`, `{{description}}`
+
+    Example WhatsApp rent reminder:
+    ```
+    Hi {{payer_name}}, your rent of KSh {{amount_due}} for {{account_no}}
+    is due on {{due_date}}. Balance: KSh {{balance}}. Pay via Paybill 123456.
+    ```
+    """
+    return await service.create_template(data)
+
+
+@obligations_router.get(
+    "/templates",
+    response_model=NotificationTemplateListResponse,
+    summary="List notification templates",
+)
+async def list_templates(
+    template_type: Optional[TemplateType]    = Query(None, alias="type"),
+    channel:       Optional[TemplateChannel] = Query(None),
+    skip:          int                       = Query(0, ge=0),
+    limit:         int                       = Query(50, ge=1, le=200),
+    service: ObligationService = Depends(get_service),
+):
+    total, items = await service.list_templates(template_type=template_type, channel=channel, skip=skip, limit=limit)
+    return NotificationTemplateListResponse(total=total, items=items)
+
+
+@obligations_router.get(
+    "/templates/{template_id}",
+    response_model=NotificationTemplateResponse,
+    summary="Get template",
+)
+async def get_template(
+    template_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.get_template(template_id)
+
+
+@obligations_router.patch(
+    "/templates/{template_id}",
+    response_model=NotificationTemplateResponse,
+    summary="Update template",
+)
+async def update_template(
+    template_id: uuid.UUID,
+    data: NotificationTemplateUpdate,
+    service: ObligationService = Depends(get_service),
+):
+    return await service.update_template(template_id, data)
+
+
+@obligations_router.delete(
+    "/templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete template",
+)
+async def delete_template(
+    template_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    await service.delete_template(template_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  OBLIGATIONS  —  /
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -330,86 +413,3 @@ async def delete_obligation(
 ):
     """Hard delete. Blocked on fully paid obligations — cancel those instead."""
     await service.delete_obligation(obligation_id)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  NOTIFICATION TEMPLATES  —  /templates
-# ══════════════════════════════════════════════════════════════════════════════
-
-@obligations_router.post(
-    "/templates",
-    response_model=NotificationTemplateResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create notification template",
-)
-async def create_template(
-    data: NotificationTemplateCreate,
-    service: ObligationService = Depends(get_service),
-):
-    """
-    Create a reusable message template for automated notifications.
-
-    Supported variables in `body` / `subject`:
-    `{{payer_name}}`, `{{amount_due}}`, `{{amount_paid}}`, `{{balance}}`,
-    `{{due_date}}`, `{{account_no}}`, `{{collection_name}}`, `{{description}}`
-
-    Example WhatsApp rent reminder:
-    ```
-    Hi {{payer_name}}, your rent of KSh {{amount_due}} for {{account_no}}
-    is due on {{due_date}}. Balance: KSh {{balance}}. Pay via Paybill 123456.
-    ```
-    """
-    return await service.create_template(data)
-
-
-@obligations_router.get(
-    "/templates",
-    response_model=NotificationTemplateListResponse,
-    summary="List notification templates",
-)
-async def list_templates(
-    template_type: Optional[TemplateType]    = Query(None, alias="type"),
-    channel:       Optional[TemplateChannel] = Query(None),
-    skip:          int                       = Query(0, ge=0),
-    limit:         int                       = Query(50, ge=1, le=200),
-    service: ObligationService = Depends(get_service),
-):
-    total, items = await service.list_templates(template_type=template_type, channel=channel, skip=skip, limit=limit)
-    return NotificationTemplateListResponse(total=total, items=items)
-
-
-@obligations_router.get(
-    "/templates/{template_id}",
-    response_model=NotificationTemplateResponse,
-    summary="Get template",
-)
-async def get_template(
-    template_id: uuid.UUID,
-    service: ObligationService = Depends(get_service),
-):
-    return await service.get_template(template_id)
-
-
-@obligations_router.patch(
-    "/templates/{template_id}",
-    response_model=NotificationTemplateResponse,
-    summary="Update template",
-)
-async def update_template(
-    template_id: uuid.UUID,
-    data: NotificationTemplateUpdate,
-    service: ObligationService = Depends(get_service),
-):
-    return await service.update_template(template_id, data)
-
-
-@obligations_router.delete(
-    "/templates/{template_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete template",
-)
-async def delete_template(
-    template_id: uuid.UUID,
-    service: ObligationService = Depends(get_service),
-):
-    await service.delete_template(template_id)

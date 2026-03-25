@@ -406,6 +406,22 @@ class ObligationService:
             
         self.db.commit()
         self.db.refresh(ob)
+
+        # Publish event
+        from app.rabbitmq import publisher
+        publisher.publish("obligation.cancelled", {
+            "obligation_id": str(ob.id),
+            "collection_id": str(ob.collection_id),
+            "payer_id": str(ob.payer_id),
+            "payer_name": ob.payer.name if ob.payer else "Unknown",
+            "account_no": ob.account_no,
+            "description": ob.description,
+            "currency": ob.currency,
+            "balance": ob.balance,
+            "email": ob.payer.email if ob.payer else None,
+            "phone": ob.payer.phone if ob.payer else None,
+        })
+
         return ob
 
     async def delete_obligation(self, obligation_id: uuid.UUID) -> None:

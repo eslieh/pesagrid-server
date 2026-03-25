@@ -10,7 +10,7 @@ Supported variables:
     psp_ref, transaction_date, phone, paybill, shortcode
 """
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import re
 
 
@@ -83,3 +83,133 @@ def build_context(
 
     ctx.update(extra)
     return ctx
+def wrap_in_template(content_html: str, business_name: Optional[str] = None) -> str:
+    """
+    Wrap the generated content in a modern, responsive HTML email template.
+    Matches the clean, vibrant landing page aesthetic.
+    """
+    # Primary accent color from the landing page: #adff2f (GreenYellow)
+    accent_color = "#adff2f"
+    platform_name = "PesaGrid"
+
+    # Determine attribution text for the footer
+    attribution = ""
+    if business_name and business_name != platform_name:
+        attribution = f"<p>This notification was sent by {platform_name} on behalf of <b>{business_name}</b>.</p>"
+    
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            background-color: #f3f4f6; 
+            margin: 0; 
+            padding: 20px; 
+            color: #111827; 
+            -webkit-font-smoothing: antialiased;
+        }}
+        .wrapper {{
+            max-width: 600px;
+            margin: 0 auto;
+        }}
+        .container {{ 
+            background: #ffffff; 
+            border-radius: 24px; 
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); 
+            overflow: hidden; 
+            border: 1px solid #e5e7eb; 
+        }}
+        .header {{ 
+            background: {accent_color}; 
+            padding: 40px 30px; 
+            text-align: center; 
+        }}
+        .header h1 {{ 
+            margin: 0; 
+            font-size: 28px; 
+            font-weight: 900; 
+            letter-spacing: -0.05em; 
+            color: #111827;
+        }}
+        .content {{ 
+            padding: 40px 30px; 
+            line-height: 1.6; 
+            font-size: 16px;
+        }}
+        .content h2 {{
+            margin-top: 0;
+            font-size: 20px;
+            font-weight: 700;
+            color: #111827;
+            letter-spacing: -0.02em;
+        }}
+        .content p {{
+            margin: 16px 0;
+            color: #4b5563;
+        }}
+        .footer {{ 
+            padding: 30px; 
+            text-align: center; 
+            font-size: 13px; 
+            color: #9ca3af; 
+        }}
+        .footer b {{
+            color: #6b7280;
+        }}
+        .footer a {{
+            color: #6b7280;
+            text-decoration: underline;
+        }}
+        .details-box {{
+            background: #f9fafb;
+            border-radius: 16px;
+            padding: 20px;
+            margin: 24px 0;
+            border: 1px solid #f3f4f6;
+        }}
+        .button {{
+            display: inline-block;
+            background: {accent_color};
+            color: #111827;
+            padding: 14px 28px;
+            border-radius: 14px;
+            font-weight: 700;
+            text-decoration: none;
+            margin-top: 10px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+        }}
+        .button-black {{
+            display: inline-block;
+            background: #111827;
+            color: #ffffff !important;
+            padding: 14px 28px;
+            border-radius: 14px;
+            font-weight: 700;
+            text-decoration: none;
+            margin-top: 10px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+        }}
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="container">
+            <div class="header">
+                <h1>{platform_name}</h1>
+            </div>
+            <div class="content">
+                {content_html}
+            </div>
+        </div>
+        <div class="footer">
+            {attribution}
+            &copy; {datetime.now().year} {platform_name}. All rights reserved.<br>
+            Automated collections & reconciliation made simple.
+        </div>
+    </div>
+</body>
+</html>
+"""

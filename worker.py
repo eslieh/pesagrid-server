@@ -36,6 +36,7 @@ from app.modules.notifications.services.handlers import (
     handle_payment_unmatched,
     handle_obligation_created,
     handle_obligation_due,
+    handle_obligation_cancelled,
 )
 from app.modules.auth.handlers import (
     handle_auth_welcome,
@@ -60,6 +61,7 @@ class PesagridWorker:
       payment.partial     →  send partial payment notice to payer
       payment.unmatched   →  alert business owner
       obligation.created  →  notify payer of new obligation
+      obligation.cancelled → notify payer of cancelled obligation
       auth.welcome        →  send verification code to new user
       auth.password_reset →  send password reset code
     """
@@ -78,6 +80,7 @@ class PesagridWorker:
         self.consumer.register_handler(EventType.PAYMENT_UNMATCHED,    handle_payment_unmatched)
         self.consumer.register_handler(EventType.OBLIGATION_CREATED,   handle_obligation_created)
         self.consumer.register_handler(EventType.OBLIGATION_DUE,       handle_obligation_due)
+        self.consumer.register_handler(EventType.OBLIGATION_CANCELLED, handle_obligation_cancelled)
         self.consumer.register_handler(EventType.AUTH_WELCOME,         handle_auth_welcome)
         self.consumer.register_handler(EventType.AUTH_PASSWORD_RESET,  handle_auth_password_reset)
 
