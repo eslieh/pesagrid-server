@@ -248,4 +248,4 @@ async def cron_worker_loop():
     while True:
         await run_billing_cycle()
         await run_reminders_cycle()
-        await asyncio.sleep(60)
+        await asyncio.sleep(18000)
