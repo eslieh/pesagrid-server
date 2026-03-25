@@ -104,7 +104,7 @@ class PesagridWorker:
         if scheduler.running:
             scheduler.shutdown()
             
-        await self.client.close()
+        await self.consumer.client.close()
 
 
 async def main():

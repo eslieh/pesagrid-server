@@ -231,6 +231,11 @@ class NotificationDispatcher:
                           error_msg="No template configured")
             else:
                 rendered = render(body_tpl, {**context, "sender_name": sender_name})
+                
+                # Auto-include digital receipt for payment events if not already in template
+                if "digital_receipt" not in body_tpl.lower() and event_type in ("payment.matched", "payment.partial"):
+                    rendered += "\n\n" + context.get("digital_receipt", "")
+
                 try:
                     result  = await send_sms(phone, rendered)
                     err     = result.get("error")
@@ -247,13 +252,20 @@ class NotificationDispatcher:
         if email:
             body_tpl, subject, tmpl_id = self._resolve_template(collection_id, event_type, "email")
             if not body_tpl:
+                # ... skipped ...
                 logger.info(f"No email template for '{event_type}' — collection {collection_id} skipped")
                 self._log(collection_id, payer_id, NotifChannel.EMAIL, email,
                           event_type, "", None, NotifStatus.SKIPPED,
                           error_msg="No template configured")
             else:
-                rendered      = render(body_tpl, {**context, "sender_name": sender_name})
-                rendered      = wrap_in_template(rendered, business_name=sender_name)
+                # Auto-include digital receipt for payment events if not already in template
+                # Note: We append the HTML version before wrapping in the layout
+                rendered_inner = render(body_tpl, {**context, "sender_name": sender_name})
+                
+                if "digital_receipt" not in body_tpl.lower() and event_type in ("payment.matched", "payment.partial"):
+                    rendered_inner += context.get("digital_receipt_html", "")
+
+                rendered      = wrap_in_template(rendered_inner, business_name=sender_name)
                 final_subject = (
                     email_subject
                     or (render(subject, context) if subject else event_type.replace(".", " ").title())

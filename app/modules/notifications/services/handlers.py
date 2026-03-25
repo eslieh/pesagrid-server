@@ -32,7 +32,8 @@ async def _dispatch(event_type: str, payload: dict) -> None:
         context = build_context(
             payer_name=payload.get("payer_name", ""),
             amount_due=payload.get("amount_due", 0),
-            amount_paid=payload.get("amount_paid", 0),
+            amount_paid=payload.get("amount", 0),      # The specific transaction amount
+            total_paid=payload.get("amount_paid", 0), # The cumulative total paid so far
             balance=payload.get("balance", 0),
             due_date=payload.get("due_date", ""),
             account_no=payload.get("account_no", ""),
