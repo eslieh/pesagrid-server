@@ -41,8 +41,8 @@ class NotificationLog(Base):
     status        = Column(SQLEnum(NotifStatus), default=NotifStatus.QUEUED, nullable=False, index=True)
     provider_ref  = Column(Text, nullable=True)               # Resend message ID / Hostpinnacle ref
     error_msg     = Column(Text, nullable=True)
-    sent_at       = Column(DateTime, nullable=True)
-    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
+    sent_at       = Column(DateTime(timezone=True), nullable=True)
+    created_at    = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
 
     __table_args__ = (
         Index("idx_notif_logs_collection_event",    "collection_id", "event_type"),

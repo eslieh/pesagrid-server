@@ -36,7 +36,7 @@ class CollectionPoint(Base):
     description   = Column(Text, nullable=True)
     is_active     = Column(Boolean, default=True, nullable=False)
     meta          = Column(JSONB, nullable=True, default=dict)
-    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
+    created_at    = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("collection_id", "account_no", name="uq_collection_point_account"),
@@ -91,9 +91,9 @@ class Transaction(Base):
         nullable=True,
         index=True
     )
-    matched_at            = Column(DateTime, nullable=True)
+    matched_at            = Column(DateTime(timezone=True), nullable=True)
     is_manual             = Column(Boolean, default=False, nullable=False)
-    ingested_at           = Column(DateTime, default=now_nairobi, nullable=False, index=True)
+    ingested_at           = Column(DateTime(timezone=True), default=now_nairobi, nullable=False, index=True)
 
     __table_args__ = (
         # Core deduplication: same PSP ref cannot be counted twice per tenant
