@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 from .models import User, AuthToken, EventLog, AuthType
 from .schema import RegisterRequest, LoginRequest, Token, UserSetupRequest
+from app.core.timezone import now_nairobi
 from app.core.security import (
     get_password_hash,
     verify_password,
@@ -169,12 +170,12 @@ class AuthService:
             raise HTTPException(400, "Invalid or expired token")
         
         # Check token expiry (24 hours)
-        if datetime.utcnow() - auth_token.sent_at > timedelta(hours=24):
+        if now_nairobi() - auth_token.sent_at > timedelta(hours=24):
             raise HTTPException(400, "Token expired")
         
         user = auth_token.user
         user.verified = True
-        user.verified_at = datetime.utcnow()
+        user.verified_at = now_nairobi()
         
         # Delete used token
         self.db.delete(auth_token)
@@ -362,7 +363,7 @@ class AuthService:
         if not auth_token:
             raise HTTPException(400, "Invalid or expired token")
         
-        if datetime.utcnow() - auth_token.sent_at > timedelta(hours=1):
+        if now_nairobi() - auth_token.sent_at > timedelta(hours=1):
             raise HTTPException(400, "Token expired")
         
         user = auth_token.user

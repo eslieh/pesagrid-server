@@ -91,9 +91,9 @@ def build_context(
     # Generate Digital Receipt Block
     # Text-only (for SMS / Simple Email)
     receipt_txt = (
-        f"--- DIGITAL RECEIPT ---\n"
+        f"--- RECEIPT ---\n"
         f"Amount: {currency} {f_amount_paid}\n"
-        f"Till/Acc: {account_no}\n"
+        f"Account Ref: {account_no}\n"
         f"Ref: {psp_ref}\n"
         f"Date: {f_date}\n"
         f"-----------------------"
@@ -102,7 +102,7 @@ def build_context(
     # HTML Styled (for wrapping in wrap_in_template)
     receipt_html = f"""
     <div style="background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 12px; padding: 16px; font-family: monospace; margin: 16px 0;">
-        <div style="text-align: center; border-bottom: 1px dashed #d1d5db; padding-bottom: 8px; margin-bottom: 8px; font-weight: bold;">DIGITAL RECEIPT</div>
+        <div style="text-align: center; border-bottom: 1px dashed #d1d5db; padding-bottom: 8px; margin-bottom: 8px; font-weight: bold;">RECEIPT</div>
         <div style="display: flex; justify-content: space-between; margin: 4px 0;"><span>Amount:</span> <b>{currency} {f_amount_paid}</b></div>
         <div style="display: flex; justify-content: space-between; margin: 4px 0;"><span>Account:</span> <b>{account_no}</b></div>
         <div style="display: flex; justify-content: space-between; margin: 4px 0;"><span>Reference:</span> <b>{psp_ref}</b></div>

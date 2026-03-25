@@ -3,6 +3,7 @@ from enum import Enum
 from sqlalchemy import Boolean, Column, DateTime, Text, Enum as SQLEnum, Index
 from app.core.db_types import UUID, uuid4
 from app.core.base import Base
+from app.core.timezone import now_nairobi
 
 
 class NotifChannel(str, Enum):
@@ -41,7 +42,7 @@ class NotificationLog(Base):
     provider_ref  = Column(Text, nullable=True)               # Resend message ID / Hostpinnacle ref
     error_msg     = Column(Text, nullable=True)
     sent_at       = Column(DateTime, nullable=True)
-    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
 
     __table_args__ = (
         Index("idx_notif_logs_collection_event",    "collection_id", "event_type"),

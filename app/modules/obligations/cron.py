@@ -14,6 +14,7 @@ from app.modules.obligations.models import (
 from app.modules.obligations.models import Payer
 from app.rabbitmq.publisher import BasePublisher
 from app.rabbitmq.types import EventType, Priority
+from app.core.timezone import now_nairobi
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _run_billing_cycle_sync():
     processed_count = 0
     
     try:
-        now = datetime.utcnow()
+        now = now_nairobi()
         while True:
             due_configs = (
                 db.query(RecurringConfig)
@@ -171,7 +172,7 @@ def _run_reminders_cycle_sync():
     reminded_count = 0
     
     try:
-        now = datetime.utcnow()
+        now = now_nairobi()
         today_str = now.date().isoformat()
         
         start_of_day = datetime(now.year, now.month, now.day)

@@ -26,6 +26,7 @@ from app.modules.notifications.services.send_sms import send_sms
 from app.modules.notifications.services.send_email import send_email
 from app.modules.obligations.models import NotificationTemplate, TemplateType
 from app.core.config import settings
+from app.core.timezone import now_nairobi
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,7 @@ class NotificationDispatcher:
             status=status,
             provider_ref=provider_ref,
             error_msg=error_msg,
-            sent_at=datetime.utcnow() if status == NotifStatus.SENT else None,
+            sent_at=now_nairobi() if status == NotifStatus.SENT else None,
         )
         self.db.add(log)
         self.db.commit()
