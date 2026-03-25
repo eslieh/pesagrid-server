@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, Column, DateTime, Text, Enum as SQLEnum, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from app.core.db_types import UUID, uuid4
 from app.core.base import Base
+from app.core.timezone import now_nairobi
 
 
 class PSPType(str, Enum):
@@ -46,8 +47,8 @@ class BusinessProfile(Base):
     # Any extras: KRA PIN, registration no, county, business type, etc.
     meta            = Column(JSONB, nullable=True, default=dict)
     created_by      = Column(UUID, nullable=False)
-    created_at      = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at      = Column(DateTime, default=now_nairobi, nullable=False)
+    updated_at      = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     __table_args__ = ({"schema": "accounts"},)
 
@@ -79,8 +80,8 @@ class PSPConfig(Base):
     meta          = Column(JSONB, nullable=True, default=dict)
     is_active     = Column(Boolean, default=True, nullable=False, index=True)
     created_by    = Column(UUID, nullable=False)
-    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
+    updated_at    = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     __table_args__ = (
         Index("idx_psp_configs_collection_type",   "collection_id", "psp_type"),

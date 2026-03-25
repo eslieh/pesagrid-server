@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from app.core.db_types import UUID, uuid4
 from sqlalchemy.orm import relationship
 from app.core.base import Base
-
+from app.core.timezone import now_nairobi
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -80,8 +80,8 @@ class PayerGroup(Base):
     # Arbitrary tenant-defined fields: e.g. {"floor": 2, "block": "A", "capacity": 30}
     meta          = Column(JSONB, nullable=True, default=dict)
     created_by    = Column(UUID, nullable=False)
-    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
+    updated_at    = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     # Relationships
     payers = relationship("Payer", back_populates="group", cascade="all, delete-orphan")
@@ -118,8 +118,8 @@ class Payer(Base):
     # Tenant-defined custom fields: e.g. {"grade": "7A", "guardian": "John Doe", "credit_limit": 50000}
     meta          = Column(JSONB, nullable=True, default=dict)
     created_by    = Column(UUID, nullable=False)
-    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
+    updated_at    = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     # Relationships
     group       = relationship("PayerGroup", back_populates="payers")
@@ -163,8 +163,8 @@ class Obligation(Base):
     # Tenant-defined custom fields: e.g. {"invoice_no": "INV-001", "penalty": 500, "term": "Term 1 2025"}
     meta           = Column(JSONB, nullable=True, default=dict)
     created_by     = Column(UUID, nullable=False, index=True)
-    created_at     = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at     = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at     = Column(DateTime, default=now_nairobi, nullable=False)
+    updated_at     = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     # Relationships
     payer = relationship("Payer", back_populates="obligations")
@@ -210,7 +210,7 @@ class RecurringConfig(Base):
     next_due_date     = Column(DateTime, nullable=True, index=True)
     grace_period_days = Column(Integer, default=0, nullable=False)
     auto_generate     = Column(Boolean, default=True, nullable=False)
-    created_at        = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at        = Column(DateTime, default=now_nairobi, nullable=False)
 
     # Relationships
     obligation = relationship("Obligation", back_populates="recurring_config")
@@ -244,8 +244,8 @@ class NotificationTemplate(Base):
     is_active     = Column(Boolean, default=True, nullable=False)
     is_default    = Column(Boolean, default=False, nullable=False)           # default template for this type+channel
     created_by    = Column(UUID, nullable=False)
-    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
+    updated_at    = Column(DateTime, default=now_nairobi, onupdate=now_nairobi, nullable=False)
 
     __table_args__ = (
         Index("idx_notif_templates_collection_type",    "collection_id", "template_type"),

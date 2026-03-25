@@ -8,6 +8,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from app.core.db_types import UUID, uuid4
 from app.core.base import Base
+from app.core.timezone import now_nairobi
 
 
 class TransactionStatus(str, Enum):
@@ -35,7 +36,7 @@ class CollectionPoint(Base):
     description   = Column(Text, nullable=True)
     is_active     = Column(Boolean, default=True, nullable=False)
     meta          = Column(JSONB, nullable=True, default=dict)
-    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at    = Column(DateTime, default=now_nairobi, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("collection_id", "account_no", name="uq_collection_point_account"),
@@ -92,7 +93,7 @@ class Transaction(Base):
     )
     matched_at            = Column(DateTime, nullable=True)
     is_manual             = Column(Boolean, default=False, nullable=False)
-    ingested_at           = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    ingested_at           = Column(DateTime, default=now_nairobi, nullable=False, index=True)
 
     __table_args__ = (
         # Core deduplication: same PSP ref cannot be counted twice per tenant

@@ -15,13 +15,15 @@ import logging
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
 
 from app.core.dependancies import SessionLocal
 from app.modules.ingestion.models import Transaction, TransactionStatus, CollectionPoint
 from app.modules.obligations.models import Obligation, ObligationStatus, Payer
+from app.core.timezone import now_nairobi
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +104,11 @@ class ReconciliationService:
         else:
             obligation.status = ObligationStatus.PARTIAL
 
-        obligation.updated_at = datetime.utcnow()
+        obligation.updated_at = now_nairobi()
 
         # Link the transaction
         transaction.matched_obligation_id = obligation.id
-        transaction.matched_at = datetime.utcnow()
+        transaction.matched_at = now_nairobi()
         transaction.status = TransactionStatus.MATCHED
 
         self.db.commit()

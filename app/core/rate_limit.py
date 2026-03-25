@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Dict
 import asyncio
 from app.core.config import settings
+from app.core.timezone import now_nairobi
 
 class RateLimiter:
     """Simple in-memory rate limiter"""
@@ -30,7 +31,7 @@ class RateLimiter:
             True if allowed, raises HTTPException if rate limited
         """
         async with self.lock:
-            now = datetime.utcnow()
+            now = now_nairobi()
             window_start = now - timedelta(seconds=window_seconds)
             
             # Initialize or clean old requests

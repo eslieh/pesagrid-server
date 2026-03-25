@@ -7,6 +7,7 @@ from sqlalchemy.orm import relationship
 from pydantic import BaseModel, EmailStr, ConfigDict
 from app.core.base import Base
 import uuid
+from app.core.timezone import now_nairobi
 
 # Enums
 class AuthType(str, Enum):
@@ -34,7 +35,7 @@ class User(Base):
     phone = Column(Text, nullable=True, index=True)
     verified = Column(Boolean, default=False, index=True)
     auth_type = Column(SQLEnum(AuthType), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=now_nairobi, index=True)
     verified_at = Column(DateTime, nullable=True)
 
     # Relationships
@@ -52,7 +53,7 @@ class AuthToken(Base):
     id = Column(UUID, primary_key=True, default=uuid4)
     user_id = Column(UUID, ForeignKey("auth.users.id"), nullable=False, index=True)
     hash_tokens = Column(Text, nullable=False, index=True)
-    sent_at = Column(DateTime, default=datetime.utcnow, index=True)
+    sent_at = Column(DateTime, default=now_nairobi, index=True)
 
     # Relationships
     user = relationship("User", back_populates="auth_tokens")
@@ -71,7 +72,7 @@ class EventLog(Base):
     done_by_user_id = Column(UUID, nullable=False, index=True)
     to_user_id = Column(UUID, nullable=True, index=True)
     event_description = Column(Text, nullable=True)
-    done_at = Column(DateTime, default=datetime.utcnow, index=True)
+    done_at = Column(DateTime, default=now_nairobi, index=True)
 
     # Relationships are removed to decouple from User deletion
 

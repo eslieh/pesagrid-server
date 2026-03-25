@@ -18,6 +18,7 @@ from app.modules.obligations.schema import (
     RecurringConfigUpdate,
     NotificationTemplateCreate, NotificationTemplateUpdate,
 )
+from app.rabbitmq import BasePublisher, EventType, Priority
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,6 @@ class ObligationService:
         group = self._get_group_or_404(group_id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(group, field, value)
-        group.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(group)
         return group
@@ -221,7 +221,6 @@ class ObligationService:
 
         for field, value in update_data.items():
             setattr(payer, field, value)
-        payer.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(payer)
         return payer
@@ -377,7 +376,6 @@ class ObligationService:
             setattr(ob, field, value)
         if "amount_due" in update_data:
             ob.balance = float(ob.amount_due) - float(ob.amount_paid)
-        ob.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(ob)
         return ob
@@ -398,7 +396,6 @@ class ObligationService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Obligation already cancelled")
         
         ob.status = ObligationStatus.CANCELLED
-        ob.updated_at = datetime.utcnow()
         
         # Stop future invoices if this was a recurring obligation setup
         if ob.recurring_config:
@@ -408,19 +405,22 @@ class ObligationService:
         self.db.refresh(ob)
 
         # Publish event
-        from app.rabbitmq import publisher
-        publisher.publish("obligation.cancelled", {
-            "obligation_id": str(ob.id),
-            "collection_id": str(ob.collection_id),
-            "payer_id": str(ob.payer_id),
-            "payer_name": ob.payer.name if ob.payer else "Unknown",
-            "account_no": ob.account_no,
-            "description": ob.description,
-            "currency": ob.currency,
-            "balance": ob.balance,
-            "email": ob.payer.email if ob.payer else None,
-            "phone": ob.payer.phone if ob.payer else None,
-        })
+        _publisher = BasePublisher(service_name="obligations-service")
+        await _publisher.publish_event(
+            event_type=EventType.OBLIGATION_CANCELLED,
+            payload={
+                "obligation_id": str(ob.id),
+                "collection_id": str(ob.collection_id),
+                "payer_id": str(ob.payer_id),
+                "payer_name": ob.payer.name if ob.payer else "Unknown",
+                "account_no": ob.account_no,
+                "description": ob.description,
+                "currency": ob.currency,
+                "balance": float(ob.balance),
+                "email": ob.payer.email if ob.payer else None,
+                "phone": ob.payer.phone if ob.payer else None,
+            }
+        )
 
         return ob
 
@@ -493,7 +493,6 @@ class ObligationService:
         t = await self.get_template(template_id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(t, field, value)
-        t.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(t)
         return t

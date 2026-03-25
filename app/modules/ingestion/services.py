@@ -12,6 +12,7 @@ from app.modules.ingestion.normalizers.mpesa import NormalizedPayment
 from app.modules.ingestion.schema import ManualPaymentCreate, CollectionPointCreate, CollectionPointUpdate
 from app.rabbitmq import BasePublisher, EventType, Priority
 from sqlalchemy import func
+from app.core.timezone import now_nairobi
 
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,6 @@ class AccountsService:
         cfg = self._get_or_404(psp_id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(cfg, field, value)
-        cfg.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(cfg)
         return cfg
