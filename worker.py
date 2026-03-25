@@ -87,18 +87,24 @@ class PesagridWorker:
         self.running = True
         await self.consumer.start()
         
-        # Start background recurring billing engine
-        from app.modules.obligations.cron import cron_worker_loop
-        asyncio.create_task(cron_worker_loop())
+        # Start background recurring billing engine (Scheduled Beat)
+        from app.modules.obligations.cron import scheduler, setup_cron_jobs
+        setup_cron_jobs()
+        scheduler.start()
 
-        logger.info("✅ Worker listening & Cron Job active. Waiting for events...")
+        logger.info("✅ Worker listening & Scheduled Beat active. Waiting for events...")
         while self.running:
             await asyncio.sleep(1)
 
     async def stop(self):
         logger.info("🛑 Stopping Pesagrid Worker...")
         self.running = False
-        await self.consumer.client.close()
+        
+        from app.modules.obligations.cron import scheduler
+        if scheduler.running:
+            scheduler.shutdown()
+            
+        await self.client.close()
 
 
 async def main():
