@@ -230,8 +230,6 @@ class IngestionService:
             )
             if existing:
                 logger.info(f"Duplicate transaction ignored: {normalized.psp_ref}")
-                existing.status = TransactionStatus.DUPLICATE
-                self.db.commit()
                 return existing, False
 
         txn = Transaction(

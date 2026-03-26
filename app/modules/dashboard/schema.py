@@ -35,3 +35,27 @@ class PaymentHistoryResponse(BaseModel):
 class NotificationPreferences(BaseModel):
     payment_notifications_enabled: bool = False
     payment_notification_channels: List[str] = ["email"]
+
+class CollectionPointSummary(BaseModel):
+    id: str
+    name: str
+    account_no: str
+    total_collected: float
+    transaction_count: int
+
+class TrendItem(BaseModel):
+    period: str
+    total: float
+    count: int
+
+class TrendResponse(BaseModel):
+    interval: str  # day, week, month, year
+    trends: List[TrendItem]
+
+class PeakTimeItem(BaseModel):
+    hour: int
+    total: float
+    count: int
+
+class PeakTimeResponse(BaseModel):
+    peaks: List[PeakTimeItem]

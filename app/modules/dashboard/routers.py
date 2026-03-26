@@ -1,13 +1,15 @@
 import logging
-from typing import List
+import uuid
+from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from app.core.dependancies import get_current_verified_user, get_db
 from app.modules.auth.models import User
 from app.modules.dashboard.schema import (
     DashboardMetrics, PaymentByAccountSummary, PaymentHistoryResponse, 
-    NotificationPreferences
+    NotificationPreferences, CollectionPointSummary, TrendResponse, PeakTimeResponse
 )
 from app.modules.dashboard.services import DashboardService
 
@@ -28,14 +30,80 @@ def get_dashboard_service(
     summary="Get top-level dashboard metrics",
 )
 async def get_metrics(
+    collection_point_id: Optional[uuid.UUID] = Query(None),
     service: DashboardService = Depends(get_dashboard_service)
 ):
     """
     Returns aggregated metrics for the dashboard:
     Total collected, total matched, total unmatched, and outstanding balances.
+    Supports filtering by collection_point_id.
     Cached via Redis for speed.
     """
-    return await service.get_metrics()
+    return await service.get_metrics(collection_point_id=collection_point_id)
+
+
+@dashboard_router.get(
+    "/collections/points",
+    response_model=List[CollectionPointSummary],
+    summary="Get aggregated metrics per collection point (e.g. per Bus)",
+)
+async def get_collection_point_metrics(
+    start_date: Optional[datetime] = Query(None),
+    end_date:   Optional[datetime] = Query(None),
+    service: DashboardService = Depends(get_dashboard_service)
+):
+    """
+    Returns total volume and transaction counts for all active collection points.
+    Ideal for fleet tracking or branch performance monitoring.
+    """
+    return await service.get_collection_point_metrics(start_date=start_date, end_date=end_date)
+
+
+@dashboard_router.get(
+    "/collections/trends",
+    response_model=TrendResponse,
+    summary="Get historical collection trends",
+)
+async def get_collection_trends(
+    interval: str = Query("day", regex="^(day|week|month|year)$"),
+    collection_point_id: Optional[uuid.UUID] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    service: DashboardService = Depends(get_dashboard_service)
+):
+    """
+    Returns historical trend data (total collected and count) broken down by interval.
+    Useful for daily/weekly/monthly/yearly reporting.
+    """
+    return await service.get_collection_trends(
+        interval=interval,
+        collection_point_id=collection_point_id,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+
+@dashboard_router.get(
+    "/collections/peak-times",
+    response_model=PeakTimeResponse,
+    summary="Get peak collection times by hour",
+)
+async def get_peak_collection_times(
+    collection_point_id: Optional[uuid.UUID] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    service: DashboardService = Depends(get_dashboard_service)
+):
+    """
+    Returns collection volume and count broken down by hour of the day.
+    Helps identify peak transaction periods.
+    """
+    peaks = await service.get_peak_collection_times(
+        collection_point_id=collection_point_id,
+        start_date=start_date,
+        end_date=end_date
+    )
+    return PeakTimeResponse(peaks=peaks)
 
 
 @dashboard_router.get(
@@ -44,15 +112,23 @@ async def get_metrics(
     summary="Get payments grouped by account",
 )
 async def get_payments_by_account(
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     service: DashboardService = Depends(get_dashboard_service)
 ):
     """
     Returns a list of accounts with their total amount paid and last payment date.
+    Supports optional date filtering (e.g., for daily tracking).
     Cached via Redis.
     """
-    return await service.get_payments_by_account(skip=skip, limit=limit)
+    return await service.get_payments_by_account(
+        start_date=start_date, 
+        end_date=end_date, 
+        skip=skip, 
+        limit=limit
+    )
 
 
 @dashboard_router.get(
@@ -61,12 +137,17 @@ async def get_payments_by_account(
     summary="Get recent payment history",
 )
 async def get_payment_history(
+    collection_point_id: Optional[uuid.UUID] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     service: DashboardService = Depends(get_dashboard_service)
 ):
     """Returns a paginated list of all recent transactions."""
-    total, items = await service.get_payment_history(skip=skip, limit=limit)
+    total, items = await service.get_payment_history(
+        skip=skip, 
+        limit=limit, 
+        collection_point_id=collection_point_id
+    )
     return PaymentHistoryResponse(total=total, items=items)
 
 
