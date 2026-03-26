@@ -169,8 +169,9 @@ class AuthService:
         if not auth_token:
             raise HTTPException(400, "Invalid or expired token")
         
+        from app.core.timezone import make_aware
         # Check token expiry (24 hours)
-        if now_nairobi() - auth_token.sent_at > timedelta(hours=24):
+        if now_nairobi() - make_aware(auth_token.sent_at) > timedelta(hours=24):
             raise HTTPException(400, "Token expired")
         
         user = auth_token.user
@@ -363,7 +364,8 @@ class AuthService:
         if not auth_token:
             raise HTTPException(400, "Invalid or expired token")
         
-        if now_nairobi() - auth_token.sent_at > timedelta(hours=1):
+        from app.core.timezone import make_aware
+        if now_nairobi() - make_aware(auth_token.sent_at) > timedelta(hours=1):
             raise HTTPException(400, "Token expired")
         
         user = auth_token.user
