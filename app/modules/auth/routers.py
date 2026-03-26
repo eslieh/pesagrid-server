@@ -44,8 +44,8 @@ async def resend_verification(
 ):
     """Resend verification email to unverified user"""
     service = AuthService(db)
-    await service.resend_verification(data.email)
-    return {"message": "If the email exists and is unverified, a new verification link has been sent"}
+    await service.resend_verification(data.identifier)
+    return {"message": "If the account exists and is unverified, a new verification link has been sent"}
 
 @auth_router.post("/login", response_model=AuthResponse)
 async def login(
@@ -192,12 +192,12 @@ async def forgot_password(
 ):
     """Request password reset"""
     service = AuthService(db)
-    token = await service.request_password_reset(data.email)
+    token = await service.request_password_reset(data.identifier)
     
     # Send reset email in background
-    # background_tasks.add_task(send_password_reset_email, data.email, token)
+    # background_tasks.add_task(send_password_reset_email, data.identifier, token)
     
-    return {"message": "If email exists, reset link sent"}
+    return {"message": "If account exists, reset link sent"}
 
 @auth_router.post("/reset-password")
 async def reset_password(

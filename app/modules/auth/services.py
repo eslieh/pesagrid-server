@@ -248,9 +248,11 @@ class AuthService:
         
         return user, tokens
     
-    async def resend_verification(self, email: str) -> None:
+    async def resend_verification(self, identifier: str) -> None:
         """Resend verification email to unverified user"""
-        user = self.db.query(User).filter(User.email == email).first()
+        user = self.db.query(User).filter(
+            (User.email == identifier) | (User.phone == identifier)
+        ).first()
         
         if not user:
             # Don't reveal if email exists for security
@@ -329,9 +331,11 @@ class AuthService:
         self._log_event("password_changed", user_id)
         self.db.commit()
     
-    async def request_password_reset(self, email: str) -> str:
+    async def request_password_reset(self, identifier: str) -> str:
         """Generate password reset token"""
-        user = self.db.query(User).filter(User.email == email).first()
+        user = self.db.query(User).filter(
+            (User.email == identifier) | (User.phone == identifier)
+        ).first()
         
         if not user:
             # Don't reveal if email exists
@@ -365,6 +369,7 @@ class AuthService:
             raise HTTPException(400, "Invalid or expired token")
         
         from app.core.timezone import make_aware
+        
         if now_nairobi() - make_aware(auth_token.sent_at) > timedelta(hours=1):
             raise HTTPException(400, "Token expired")
         
