@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, text
 import uuid
 import logging
+import json
 
+from app.core.cache import cache
 from app.modules.obligations.models import (
     Obligation, ObligationStatus,
     Payer, PayerGroup,
@@ -34,6 +37,10 @@ class ObligationService:
     def _get_obligation_or_404(self, obligation_id: uuid.UUID) -> Obligation:
         ob = (
             self.db.query(Obligation)
+            .options(
+                joinedload(Obligation.payer),
+                joinedload(Obligation.recurring_config),
+            )
             .filter(
                 Obligation.id == obligation_id,
                 Obligation.collection_id == self.collection_id,
@@ -308,8 +315,7 @@ class ObligationService:
         self.db.commit()
         self.db.refresh(obligation)
 
-        # Publish event for the notification worker
-        payer = self._get_payer_or_404(data.payer_id)
+        # Publish event — reuse already-loaded payer object, don't re-query
         await self._publish_obligation_created(obligation, payer)
 
         return obligation
@@ -348,7 +354,25 @@ class ObligationService:
         skip: int = 0,
         limit: int = 50,
     ) -> Tuple[int, List[Obligation]]:
-        q = self.db.query(Obligation).filter(Obligation.collection_id == self.collection_id)
+        # Build cache key scoped to this tenant
+        cache_key = f"obligations:list:{self.collection_id}:{payer_id}:{account_no}:{ob_status}:{is_recurring}:{skip}:{limit}"
+        if cache.client:
+            try:
+                cached = await cache.client.get(cache_key)
+                if cached:
+                    data = json.loads(cached)
+                    return data["total"], []
+            except Exception as e:
+                logger.warning(f"Cache read error (obligations list): {e}")
+
+        q = (
+            self.db.query(Obligation)
+            .options(
+                joinedload(Obligation.payer),
+                joinedload(Obligation.recurring_config),
+            )
+            .filter(Obligation.collection_id == self.collection_id)
+        )
         if payer_id:
             q = q.filter(Obligation.payer_id == payer_id)
         if account_no:
@@ -357,11 +381,50 @@ class ObligationService:
             q = q.filter(Obligation.status == ob_status)
         if is_recurring is not None:
             q = q.filter(Obligation.is_recurring == is_recurring)
-        total = q.count()
-        items = q.order_by(Obligation.created_at.desc()).offset(skip).limit(limit).all()
+
+        # Single query: use a window function to avoid separate COUNT round-trip
+        total_col = func.count(Obligation.id).over().label("_total")
+        q_with_total = (
+            self.db.query(Obligation, total_col)
+            .options(
+                joinedload(Obligation.payer),
+                joinedload(Obligation.recurring_config),
+            )
+            .filter(Obligation.collection_id == self.collection_id)
+        )
+        if payer_id:
+            q_with_total = q_with_total.filter(Obligation.payer_id == payer_id)
+        if account_no:
+            q_with_total = q_with_total.filter(Obligation.account_no == account_no)
+        if ob_status:
+            q_with_total = q_with_total.filter(Obligation.status == ob_status)
+        if is_recurring is not None:
+            q_with_total = q_with_total.filter(Obligation.is_recurring == is_recurring)
+
+        rows = (
+            q_with_total
+            .order_by(Obligation.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+        items = [row[0] for row in rows]
+        total = rows[0][1] if rows else 0
+
+        # Cache total only (models can't be serialised easily)
+        if cache.client:
+            try:
+                await cache.client.setex(cache_key, 60, json.dumps({"total": total}))
+            except Exception as e:
+                logger.warning(f"Cache write error (obligations list): {e}")
+
         return total, items
 
     async def get_obligation(self, obligation_id: uuid.UUID) -> Obligation:
+        cache_key = f"obligation:{self.collection_id}:{obligation_id}"
+        # Single row with joinedload — no cache for the ORM object itself,
+        # but _get_obligation_or_404 already uses joinedload so it's a single SQL.
         return self._get_obligation_or_404(obligation_id)
 
     async def update_obligation(self, obligation_id: uuid.UUID, data: ObligationUpdate) -> Obligation:
@@ -404,6 +467,11 @@ class ObligationService:
         self.db.commit()
         self.db.refresh(ob)
 
+        # Payer already loaded via joinedload — no extra query
+        payer_name = ob.payer.name if ob.payer else "Unknown"
+        payer_email = ob.payer.email if ob.payer else None
+        payer_phone = ob.payer.phone if ob.payer else None
+
         # Publish event
         _publisher = BasePublisher(service_name="obligations-service")
         await _publisher.publish_event(
@@ -412,13 +480,13 @@ class ObligationService:
                 "obligation_id": str(ob.id),
                 "collection_id": str(ob.collection_id),
                 "payer_id": str(ob.payer_id),
-                "payer_name": ob.payer.name if ob.payer else "Unknown",
+                "payer_name": payer_name,
                 "account_no": ob.account_no,
                 "description": ob.description,
                 "currency": ob.currency,
                 "balance": float(ob.balance),
-                "email": ob.payer.email if ob.payer else None,
-                "phone": ob.payer.phone if ob.payer else None,
+                "email": payer_email,
+                "phone": payer_phone,
             }
         )
 
