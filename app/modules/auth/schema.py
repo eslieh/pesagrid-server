@@ -50,7 +50,7 @@ class VerifyAccountRequest(BaseModel):
     token: str
     
 class ResendVerificationRequest(BaseModel):
-    email: EmailStr
+    identifier: str = Field(..., description="Email or phone")
 
 # Password Management
 class ChangePasswordRequest(BaseModel):
@@ -58,7 +58,7 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=100)
 
 class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
+    identifier: str = Field(..., description="Email or phone")
 
 class ResetPasswordRequest(BaseModel):
     token: str
