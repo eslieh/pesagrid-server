@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # Cookie Configuration
     COOKIE_DOMAIN: Optional[str] = None  # None for same-origin
-    COOKIE_SECURE: bool = False  # Require HTTPS but of for now
+    COOKIE_SECURE: bool = True  # Require HTTPS but of for now
     COOKIE_SAMESITE: Optional[str] = None  # CSRF protection
 
     model_config = SettingsConfigDict(
