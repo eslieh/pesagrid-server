@@ -56,8 +56,8 @@ def get_authed_service(
 # ══════════════════════════════════════════════════════════════════════════════
 
 @webhook_router.post(
-    "/{collection_id}/mpesa/callback",
-    summary="M-PESA C2B / STK callback",
+    "/{collection_id}/c2b/callback",
+    summary="C2B / STK callback",
     status_code=status.HTTP_200_OK,
 )
 async def mpesa_callback(
@@ -94,6 +94,22 @@ async def mpesa_callback(
         logger.error(f"Failed to queue M-PESA callback for {collection_id}: {e}")
 
     # ── 3. Acknowledge immediately ───────────────────────────────────────────
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+@webhook_router.post(
+    "/{collection_id}/c2b/validate",
+    summary="C2B validation callback",
+    status_code=status.HTTP_200_OK,
+)
+async def mpesa_validate(
+    collection_id: uuid.UUID,
+    request: Request,
+):
+    """
+    Safaricom fires this URL to validate a payment before completing it.
+    Returns HTTP 200 with Accepted status to allow all payments.
+    """
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
