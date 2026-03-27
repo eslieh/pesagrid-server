@@ -25,15 +25,22 @@ def compute_next_due(config: RecurringConfig, from_date: datetime) -> Optional[d
     rt = config.recurrence_type
 
     if rt == RecurrenceType.MONTHLY:
-        try:
-            from dateutil.relativedelta import relativedelta
-            day = config.day_of_month or from_date.day
-            next_dt = from_date.replace(day=day)
-            if next_dt <= from_date:
-                next_dt = (from_date + relativedelta(months=1)).replace(day=day)
-            return next_dt
-        except ImportError:
-            return from_date + timedelta(days=30)
+        import calendar
+        day = config.day_of_month or from_date.day
+        
+        _, max_days_curr = calendar.monthrange(from_date.year, from_date.month)
+        next_dt = from_date.replace(day=min(day, max_days_curr))
+        
+        if next_dt <= from_date:
+            month = from_date.month + 1
+            year = from_date.year
+            if month > 12:
+                month = 1
+                year += 1
+            _, max_days_next = calendar.monthrange(year, month)
+            next_dt = from_date.replace(year=year, month=month, day=min(day, max_days_next))
+            
+        return next_dt
 
     elif rt == RecurrenceType.WEEKLY:
         dow = config.day_of_week if config.day_of_week is not None else from_date.weekday()
@@ -129,7 +136,8 @@ def _run_billing_cycle_sync():
                     
                     # 5. Prepare event for publication
                     payer = db.query(Payer).filter(Payer.id == new_ob.payer_id).first()
-                    if payer:
+                    # Only publish the notification if this is the final catch-up obligation
+                    if payer and (config.next_due_date is None or config.next_due_date > now):
                         events_to_publish.append({
                             "event_type": EventType.OBLIGATION_CREATED,
                             "payload": {
@@ -175,15 +183,23 @@ def _run_reminders_cycle_sync():
         now = now_nairobi()
         today_str = now.date().isoformat()
         
-        start_of_day = datetime(now.year, now.month, now.day)
-        end_of_day = start_of_day + timedelta(days=1)
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
+        target_upcoming = start_of_day + timedelta(days=3)
+        target_today    = start_of_day
+        target_overdue  = start_of_day - timedelta(days=2)
+        
+        from sqlalchemy import or_, and_
         query = (
             db.query(Obligation)
             .filter(
                 Obligation.status.in_([ObligationStatus.PENDING, ObligationStatus.PARTIAL]),
-                Obligation.due_date >= start_of_day,
-                Obligation.due_date < end_of_day
+                Obligation.due_date.isnot(None),
+                or_(
+                    and_(Obligation.due_date >= target_upcoming, Obligation.due_date < target_upcoming + timedelta(days=1)),
+                    and_(Obligation.due_date >= target_today,    Obligation.due_date < target_today + timedelta(days=1)),
+                    and_(Obligation.due_date >= target_overdue,  Obligation.due_date < target_overdue + timedelta(days=1))
+                )
             )
         )
         
@@ -196,6 +212,17 @@ def _run_reminders_cycle_sync():
             for ob in due_obs:
                 meta = dict(ob.meta or {})
                 if meta.get("reminder_sent_date") == today_str:
+                    continue
+                    
+                # Determine reminder type based on due date
+                ob_date = ob.due_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                if ob_date == target_upcoming:
+                    rem_type = "upcoming"
+                elif ob_date == target_today:
+                    rem_type = "due_today"
+                elif ob_date == target_overdue:
+                    rem_type = "overdue"
+                else:
                     continue
                     
                 try:
@@ -219,6 +246,7 @@ def _run_reminders_cycle_sync():
                             "currency":       ob.currency,
                             "due_date":       ob.due_date.isoformat(),
                             "description":    ob.description or "",
+                            "reminder_type":  rem_type,
                         }
                     })
                     

@@ -76,16 +76,22 @@ class ObligationService:
         rt = config_data.recurrence_type
 
         if rt == RecurrenceType.MONTHLY:
-            try:
-                from dateutil.relativedelta import relativedelta
-                day = config_data.day_of_month or from_date.day
-                next_dt = from_date.replace(day=day)
-                if next_dt <= from_date:
-                    next_dt = (from_date + relativedelta(months=1)).replace(day=day)
-                return next_dt
-            except ImportError:
-                # fallback without dateutil
-                return from_date + timedelta(days=30)
+            import calendar
+            day = config_data.day_of_month or from_date.day
+            
+            _, max_days_curr = calendar.monthrange(from_date.year, from_date.month)
+            next_dt = from_date.replace(day=min(day, max_days_curr))
+            
+            if next_dt <= from_date:
+                month = from_date.month + 1
+                year = from_date.year
+                if month > 12:
+                    month = 1
+                    year += 1
+                _, max_days_next = calendar.monthrange(year, month)
+                next_dt = from_date.replace(year=year, month=month, day=min(day, max_days_next))
+                
+            return next_dt
 
         elif rt == RecurrenceType.WEEKLY:
             dow = config_data.day_of_week if config_data.day_of_week is not None else from_date.weekday()
