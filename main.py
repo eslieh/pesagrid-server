@@ -38,7 +38,9 @@ app.add_middleware(
         "http://localhost:3001",
         "http://localhost:3002",
         "http://172.16.20.207",
-        "https://pesagrid.vercel.app"
+        "https://pesagrid.vercel.app",
+        "https://pesagrid.co.ke",
+        "https://www.pesagrid.co.ke"
     ],
     allow_credentials=True,
     allow_methods=["*"],

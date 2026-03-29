@@ -17,7 +17,7 @@ BASE_URL = "https://api.safaricom.co.ke"  # for production
 
 SHORT_CODE = os.getenv("MPESA_SHORT_CODE")  # your paybill/till number
 
-CONFIRMATION_URL = "https://api.ryfty.net/pesagrid/api/v1/ingest/a2d70695-f572-470c-8a48-256b4ee79317/c2b/callback"
+CONFIRMATION_URL = "https://api.ryfty.net/pesagrid-api/api/v1/ingest/a2d70695-f572-470c-8a48-256b4ee79317/c2b/callback"
 
 # ====== STEP 1: GET ACCESS TOKEN ======
 def get_mpesa_auth_token():
@@ -45,12 +45,13 @@ def register_urls():
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
+    print(SHORT_CODE)
     
     payload = {
         "ShortCode": SHORT_CODE,
         "ResponseType": "Completed",  # or "Cancelled"
         "ConfirmationURL": CONFIRMATION_URL,
-        "ValidationURL": "https://api.ryfty.net/pesagrid/api/v1/ingest/a2d70695-f572-470c-8a48-256b4ee79317/c2b/validate"
+        "ValidationURL": "https://api.ryfty.net/pesagrid-api/api/v1/ingest/a2d70695-f572-470c-8a48-256b4ee79317/c2b/validate"
     }
     
     response = requests.post(url, json=payload, headers=headers)
