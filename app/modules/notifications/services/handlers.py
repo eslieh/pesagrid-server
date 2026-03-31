@@ -46,6 +46,9 @@ async def _dispatch(event_type: str, payload: dict) -> None:
             login_url=payload.get("login_url", ""),
             otp=payload.get("otp", ""),
             reset_url=payload.get("reset_url", ""),
+            is_rollover=payload.get("is_rollover", False),
+            previous_arrears=payload.get("previous_arrears", 0.0),
+            penalty=payload.get("penalty", 0.0),
         )
 
 

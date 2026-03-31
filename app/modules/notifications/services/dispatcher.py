@@ -237,6 +237,10 @@ class NotificationDispatcher:
                 if "digital_receipt" not in body_tpl.lower() and event_type in ("payment.matched", "payment.partial"):
                     rendered += "\n\n" + context.get("digital_receipt", "")
 
+                # Auto-include rollover details for obligation.created if it's a rollover
+                if context.get("is_rollover") and "rollover" not in body_tpl.lower():
+                    rendered += context.get("rollover_block_txt", "")
+
                 try:
                     result  = await send_sms(phone, rendered)
                     err     = result.get("error")
@@ -265,6 +269,10 @@ class NotificationDispatcher:
                 
                 if "digital_receipt" not in body_tpl.lower() and event_type in ("payment.matched", "payment.partial"):
                     rendered_inner += context.get("digital_receipt_html", "")
+
+                # Auto-include rollover details for obligation.created if it's a rollover
+                if context.get("is_rollover") and "rollover" not in body_tpl.lower():
+                    rendered_inner += context.get("rollover_block_html", "")
 
                 rendered      = wrap_in_template(rendered_inner, business_name=sender_name)
                 final_subject = (
