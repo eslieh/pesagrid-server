@@ -34,8 +34,9 @@ class CollectionPoint(Base):
     name          = Column(Text, nullable=False)           # e.g. "Matatu KAB-123C"
     account_no    = Column(Text, nullable=False, index=True) # BillRefNumber
     description   = Column(Text, nullable=True)
-    is_active     = Column(Boolean, default=True, nullable=False)
-    meta          = Column(JSONB, nullable=True, default=dict)
+    is_active           = Column(Boolean, default=True, nullable=False)
+    sms_acknowledgement = Column(Boolean, default=False, nullable=False)  # opt-in: send receipt SMS to payer
+    meta                = Column(JSONB, nullable=True, default=dict)
     created_at    = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
 
     __table_args__ = (

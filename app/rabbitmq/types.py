@@ -17,7 +17,8 @@ class EventType(str, Enum):
     # Reconciliation outcomes
     PAYMENT_MATCHED   = "payment.matched"     # obligation → PAID
     PAYMENT_PARTIAL   = "payment.partial"     # obligation → PARTIAL
-    PAYMENT_UNMATCHED = "payment.unmatched"   # no obligation found
+    PAYMENT_UNMATCHED    = "payment.unmatched"     # no obligation found
+    PAYMENT_CATEGORIZED  = "payment.categorized"   # collection point payment — opt-in acknowledgement
     # Obligations lifecycle
     OBLIGATION_CREATED = "obligation.created"
     OBLIGATION_DUE     = "obligation.due"     # scheduled reminder (future)
@@ -25,7 +26,13 @@ class EventType(str, Enum):
     # Auth
     AUTH_WELCOME        = "auth.welcome"
     AUTH_PASSWORD_RESET = "auth.password_reset"
+    AUTH_MFA_REQUEST    = "auth.mfa_request"      # send MFA code
     USER_VERIFIED       = "auth.user_verified"
+
+    # Configuration changes 
+    CONFIG_PSP_CREATED              = "config.psp.created"               # Notify owner of new PSP
+    CONFIG_PSP_DELETED              = "config.psp.deleted"               # Notify owner of deleted PSP
+    CONFIG_COLLECTION_POINT_CREATED = "config.collection_point.created"  # Notify owner of new Collection Point
 
 class Priority(int, Enum):
     LOW = 0

@@ -34,13 +34,18 @@ from app.modules.notifications.services.handlers import (
     handle_payment_matched,
     handle_payment_partial,
     handle_payment_unmatched,
+    handle_payment_categorized,
     handle_obligation_created,
     handle_obligation_due,
     handle_obligation_cancelled,
+    handle_config_psp_created,
+    handle_config_psp_deleted,
+    handle_config_collection_point_created,
 )
 from app.modules.auth.handlers import (
     handle_auth_welcome,
     handle_auth_password_reset,
+    handle_auth_mfa,
 )
 
 logging.basicConfig(
@@ -55,15 +60,16 @@ class PesagridWorker:
     Async worker — runs separately from the FastAPI server.
 
     Events consumed:
-      webhook.mpesa       →  normalize → ingest → reconcile M-PESA callback
-      payment.received    →  reconcile an already-ingested transaction
-      payment.matched     →  send payment receipt to payer
-      payment.partial     →  send partial payment notice to payer
-      payment.unmatched   →  alert business owner
-      obligation.created  →  notify payer of new obligation
-      obligation.cancelled → notify payer of cancelled obligation
-      auth.welcome        →  send verification code to new user
-      auth.password_reset →  send password reset code
+      webhook.mpesa        →  normalize → ingest → reconcile M-PESA callback
+      payment.received     →  reconcile an already-ingested transaction
+      payment.matched      →  send payment receipt to payer
+      payment.partial      →  send partial payment notice to payer
+      payment.unmatched    →  alert business owner
+      payment.categorized  →  send acknowledgement SMS for collection point payment
+      obligation.created   →  notify payer of new obligation
+      obligation.cancelled →  notify payer of cancelled obligation
+      auth.welcome         →  send verification code to new user
+      auth.password_reset  →  send password reset code
     """
 
     def __init__(self):
@@ -78,11 +84,16 @@ class PesagridWorker:
         self.consumer.register_handler(EventType.PAYMENT_MATCHED,      handle_payment_matched)
         self.consumer.register_handler(EventType.PAYMENT_PARTIAL,      handle_payment_partial)
         self.consumer.register_handler(EventType.PAYMENT_UNMATCHED,    handle_payment_unmatched)
+        self.consumer.register_handler(EventType.PAYMENT_CATEGORIZED,  handle_payment_categorized)
         self.consumer.register_handler(EventType.OBLIGATION_CREATED,   handle_obligation_created)
         self.consumer.register_handler(EventType.OBLIGATION_DUE,       handle_obligation_due)
         self.consumer.register_handler(EventType.OBLIGATION_CANCELLED, handle_obligation_cancelled)
         self.consumer.register_handler(EventType.AUTH_WELCOME,         handle_auth_welcome)
         self.consumer.register_handler(EventType.AUTH_PASSWORD_RESET,  handle_auth_password_reset)
+        self.consumer.register_handler(EventType.AUTH_MFA_REQUEST,     handle_auth_mfa)
+        self.consumer.register_handler(EventType.CONFIG_PSP_CREATED,   handle_config_psp_created)
+        self.consumer.register_handler(EventType.CONFIG_PSP_DELETED,   handle_config_psp_deleted)
+        self.consumer.register_handler(EventType.CONFIG_COLLECTION_POINT_CREATED, handle_config_collection_point_created)
 
         self.running = True
         await self.consumer.start()

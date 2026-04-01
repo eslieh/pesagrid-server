@@ -1,13 +1,19 @@
 import uuid
 from typing import Optional, Any, Dict
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.core.dependancies import get_current_verified_user, get_db
+from app.core.dependancies import get_current_verified_user, get_db, verify_mfa
 from app.core.config import settings
 from app.modules.auth.models import User
+from app.modules.accounts.models import BusinessProfile, PSPConfig
+from app.rabbitmq import BasePublisher, EventType
+
+async def publish_config_event(event_type: EventType, payload: dict):
+    publisher = BasePublisher("accounts-service")
+    await publisher.publish_event(event_type, payload)
 from app.modules.accounts.models import BusinessProfile
 from app.modules.accounts.schema import (
     PSPConfigCreate, PSPConfigUpdate,
@@ -74,20 +80,22 @@ def get_service(
 )
 def create_psp(
     data: PSPConfigCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(verify_mfa),
     service: AccountsService = Depends(get_service),
 ):
-    """
-    Register a PSP (e.g. M-PESA, KCB) as a payment entry point.
-
-    The response includes the generated **webhook_url** — register this URL
-    with the PSP so they send callbacks to your Pesagrid workspace.
-
-    **M-PESA example** — register with Safaricom Daraja as your C2B
-    Confirmation URL and Validation URL.
-
-    Credentials are shown **only in this response** and redacted thereafter.
-    """
+    """Register a PSP and dispatch a notification with instructions."""
     cfg = service.create_psp(data, base_url=settings.BASE_URL)
+    
+    payload = {
+        "collection_id": str(cfg.collection_id),
+        "psp_id": str(cfg.id),
+        "psp_type": cfg.psp_type.value,
+        "paybill": cfg.paybill,
+        "webhook_url": cfg.webhook_url,
+    }
+    background_tasks.add_task(publish_config_event, EventType.CONFIG_PSP_CREATED, payload)
+    
     return cfg
 
 
@@ -125,6 +133,7 @@ def get_psp(
 def update_psp(
     psp_id: uuid.UUID,
     data: PSPConfigUpdate,
+    current_user: User = Depends(verify_mfa),
     service: AccountsService = Depends(get_service),
 ):
     return service.update_psp(psp_id, data)
@@ -137,9 +146,19 @@ def update_psp(
 )
 def delete_psp(
     psp_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(verify_mfa),
     service: AccountsService = Depends(get_service),
 ):
+    cfg = service.get_psp(psp_id)
+    payload = {
+        "collection_id": str(cfg.collection_id),
+        "psp_type": cfg.psp_type.value,
+        "paybill": cfg.paybill,
+    }
+    
     service.delete_psp(psp_id)
+    background_tasks.add_task(publish_config_event, EventType.CONFIG_PSP_DELETED, payload)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

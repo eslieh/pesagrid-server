@@ -136,3 +136,40 @@ def get_optional_user(
         return user
     except Exception:
         return None
+
+def verify_mfa(
+    x_mfa_token: Optional[str] = Header(None, alias="X-MFA-Token"),
+    current_user: User = Depends(get_current_verified_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """Ensure the user provided a valid MFA code for a sensitive action."""
+    if not x_mfa_token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA token required for this action")
+        
+    import hashlib
+    from app.modules.auth.models import AuthToken
+    from app.core.timezone import now_nairobi, make_aware
+    from datetime import timedelta
+    
+    hashed_token = hashlib.sha256(x_mfa_token.encode()).hexdigest()
+    
+    # Check if there is a matching token
+    auth_token = db.query(AuthToken).filter(
+        AuthToken.user_id == current_user.id,
+        AuthToken.hash_tokens == hashed_token
+    ).first()
+    
+    if not auth_token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid MFA token")
+        
+    # Tokens for actions expire quickly (e.g. 15 minutes)
+    if now_nairobi() - make_aware(auth_token.sent_at) > timedelta(minutes=15):
+        db.delete(auth_token)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA token expired")
+        
+    # Consume token so it can't be reused
+    db.delete(auth_token)
+    db.commit()
+    
+    return current_user

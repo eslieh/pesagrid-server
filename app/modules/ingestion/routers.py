@@ -1,10 +1,10 @@
 import uuid
 from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
+from fastapi import APIRouter, Depends, Query, Request, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 import logging
 
-from app.core.dependancies import get_current_verified_user, get_db
+from app.core.dependancies import get_current_verified_user, get_db, verify_mfa
 from app.modules.auth.models import User
 from app.modules.ingestion.models import TransactionStatus
 from app.modules.ingestion.schema import (
@@ -14,6 +14,8 @@ from app.modules.ingestion.schema import (
 )
 from app.modules.ingestion.services import IngestionService, CollectionPointService
 from app.rabbitmq import BasePublisher, EventType, Priority
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,10 @@ def get_collection_point_service(
     return CollectionPointService(db=db, collection_id=current_user.id)
 
 
-
+async def publish_config_event(event_type: EventType, payload: dict):
+    publisher = BasePublisher("ingestion-service")
+    await publisher.publish_event(event_type, payload)
+    
 def get_ingestion_service(
     collection_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -185,13 +190,24 @@ def get_transaction(
 )
 def create_collection_point(
     data: CollectionPointCreate,
+    background_tasks: BackgroundTasks,
     service: CollectionPointService = Depends(get_collection_point_service),
 ):
     """
     Define a new target for bulk collections (a bus, a campaign, etc.).
     All payments to this account_no will be grouped here.
     """
-    return service.create_collection_point(data)
+    cp = service.create_collection_point(data)
+    
+    payload = {
+        "collection_id": str(cp.collection_id),
+        "cp_id": str(cp.id),
+        "name": cp.name,
+        "account_no": cp.account_no,
+    }
+    background_tasks.add_task(publish_config_event, EventType.CONFIG_COLLECTION_POINT_CREATED, payload)
+    
+    return cp
 
 
 @collection_points_router.get(
@@ -228,4 +244,15 @@ def update_collection_point(
     service: CollectionPointService = Depends(get_collection_point_service),
 ):
     return service.update_collection_point(cp_id, data)
+
+@collection_points_router.delete(
+    "/{cp_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete collection point",
+)
+def delete_collection_point(
+    cp_id: uuid.UUID,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    service.delete_collection_point(cp_id)
 

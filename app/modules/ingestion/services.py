@@ -185,6 +185,19 @@ class CollectionPointService:
         self.db.refresh(cp)
         return cp
 
+    def delete_collection_point(self, cp_id: uuid.UUID) -> None:
+        cp = self._get_or_404(cp_id)
+        # Prevent deletion if transactions exist
+        from app.modules.ingestion.models import Transaction
+        tx_count = self.db.query(Transaction).filter(Transaction.collection_point_id == cp.id).count()
+        if tx_count > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete collection point with associated transactions. Use is_active=False instead."
+            )
+        self.db.delete(cp)
+        self.db.commit()
+
 
 
 

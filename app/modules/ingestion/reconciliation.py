@@ -198,10 +198,36 @@ async def reconcile_transaction(transaction_id: str):
         if result_status == "ALREADY_PROCESSED":
             return True
         
-        # CATEGORIZED is for bulk collection (Matatus). 
-        # The user requested to skip premium SMS receipts for these to save costs.
+        # CATEGORIZED = CollectionPoint (bulk). Only send an acknowledgement
+        # SMS if the business has opted in on that specific collection point.
         if result_status == "CATEGORIZED":
-            logger.info(f"Skipping notification for categorized transaction {transaction_id}")
+            from app.modules.ingestion.models import Transaction as Txn
+            from app.modules.ingestion.models import CollectionPoint as CP
+            txn = db.query(Txn).filter(Txn.id == uuid.UUID(transaction_id)).first()
+            if txn and txn.collection_point_id and txn.phone:
+                cp = db.query(CP).filter(CP.id == txn.collection_point_id).first()
+                if cp and cp.sms_acknowledgement:
+                    payload = {
+                        "transaction_id":        str(txn.id),
+                        "collection_id":         str(txn.collection_id),
+                        "collection_point_name": cp.name,
+                        "account_no":            txn.account_no or "",
+                        "amount":                float(txn.amount),
+                        "currency":              txn.currency,
+                        "phone":                 txn.phone,
+                        "payer_name":            txn.payer_name or "",
+                        "psp_ref":               txn.psp_ref or "",
+                        "psp_type":              txn.psp_type or "",
+                        "ingested_at":           txn.ingested_at.isoformat() if txn.ingested_at else "",
+                    }
+                    try:
+                        await _publisher.publish_event(
+                            event_type=EventType.PAYMENT_CATEGORIZED,
+                            payload=payload,
+                            priority=Priority.MEDIUM,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to publish PAYMENT_CATEGORIZED event: {e}")
             return True
 
         # Re-read for event payload

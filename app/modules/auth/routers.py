@@ -209,6 +209,21 @@ async def reset_password(
     await service.reset_password(data.token, data.new_password)
     return {"message": "Password reset successful"}
 
+@auth_router.post("/mfa/request")
+async def request_mfa(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Request a Two-Step Verification (MFA) token for sensitive actions."""
+    # Delete old tokens for clean slate
+    from app.modules.auth.models import AuthToken
+    db.query(AuthToken).filter(AuthToken.user_id == current_user.id).delete()
+    db.flush()
+    
+    service = AuthService(db)
+    await service.request_mfa_token(current_user.id)
+    return {"message": "Verification code sent successfully"}
+
 @auth_router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
     current_user: User = Depends(get_current_user)

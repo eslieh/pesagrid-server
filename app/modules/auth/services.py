@@ -359,6 +359,28 @@ class AuthService:
 
         return token
     
+    async def request_mfa_token(self, user_id: uuid.UUID) -> None:
+        """Generate and send an MFA verification code."""
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(404, "User not found")
+            
+        token = self._generate_verification_token(user.id)
+        self._log_event("mfa_requested", user.id)
+        self.db.commit()
+
+        publisher = BasePublisher(service_name="auth-service")
+        await publisher.publish_event(
+            event_type=EventType.AUTH_MFA_REQUEST,
+            payload={
+                "user_id": str(user.id),
+                "email": user.email,
+                "phone": user.phone,
+                "auth_type": user.auth_type.value,
+                "token": token
+            }
+        )
+
     async def reset_password(self, token: str, new_password: str) -> None:
         """Reset password using token"""
         auth_token = self.db.query(AuthToken).filter(
