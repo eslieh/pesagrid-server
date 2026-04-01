@@ -57,26 +57,29 @@ class TransactionListResponse(BaseModel):
 # ─── CollectionPoint Schemas ──────────────────────────────────────────────────
 
 class CollectionPointBase(BaseModel):
-    name:        str = Field(..., example="Matatu KAB-123C")
-    account_no:  str = Field(..., example="KAB-123C")
-    description: Optional[str] = None
-    is_active:   bool = True
-    meta:        Optional[Dict] = {}
+    name:                str = Field(..., example="Matatu KAB-123C")
+    account_no:          str = Field(..., example="KAB-123C")
+    description:         Optional[str] = None
+    is_active:           bool = True
+    sms_acknowledgement: bool = False
+    meta:                Optional[Dict] = {}
 
 class CollectionPointCreate(CollectionPointBase):
     pass
 
 class CollectionPointUpdate(BaseModel):
-    name:        Optional[str] = None
-    account_no:  Optional[str] = None
-    description: Optional[str] = None
-    is_active:   Optional[bool] = None
-    meta:        Optional[Dict] = None
+    name:                Optional[str] = None
+    account_no:          Optional[str] = None
+    description:         Optional[str] = None
+    is_active:           Optional[bool] = None
+    sms_acknowledgement: Optional[bool] = None
+    meta:                Optional[Dict] = None
 
 class CollectionPointRead(CollectionPointBase):
-    id:            uuid.UUID
-    collection_id: uuid.UUID
-    created_at:    datetime
+    id:                  uuid.UUID
+    collection_id:       uuid.UUID
+    sms_acknowledgement: bool
+    created_at:          datetime
 
     class Config:
         from_attributes = True

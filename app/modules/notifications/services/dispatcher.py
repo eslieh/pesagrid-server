@@ -38,10 +38,19 @@ _EVENT_TO_TEMPLATE_TYPE = {
     "obligation.cancelled": TemplateType.OBLIGATION_CANCELLED,
     "payment.matched":     TemplateType.PAYMENT_RECEIPT_FULL,  # fully settled
     "payment.partial":     TemplateType.PAYMENT_RECEIPT,       # still owes a balance
+    "payment.categorized": TemplateType.COLLECTION_RECEIPT,    # collection point acknowledgement
     "payment.unmatched":   TemplateType.CUSTOM,
     "auth.welcome":        TemplateType.CUSTOM,
     "auth.password_reset": TemplateType.CUSTOM,
 }
+
+# Hardcoded fallback for collection point receipts — used when the business
+# hasn't created a COLLECTION_RECEIPT template, so toggling sms_acknowledgement
+# on works immediately without any template setup.
+_COLLECTION_POINT_FALLBACK_SMS = (
+    "Payment of {{currency}} {{amount_paid}} received for {{collection_point_name}}. "
+    "Ref: {{psp_ref}}. Thank you!"
+)
 
 
 def _build_from_email(display_name: str, domain_or_email: str, platform: bool = False) -> str:
@@ -225,6 +234,12 @@ class NotificationDispatcher:
         # ── SMS ───────────────────────────────────────────────────────────────
         if phone:
             body_tpl, _, tmpl_id = self._resolve_template(collection_id, event_type, "sms")
+
+            # Fallback for collection point receipts — works out of the box
+            if not body_tpl and event_type == "payment.categorized":
+                body_tpl = _COLLECTION_POINT_FALLBACK_SMS
+                tmpl_id = None
+
             if not body_tpl:
                 logger.info(f"No SMS template for '{event_type}' — collection {collection_id} skipped")
                 self._log(collection_id, payer_id, NotifChannel.SMS, phone,

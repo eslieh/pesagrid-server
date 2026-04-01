@@ -54,6 +54,7 @@ class TemplateType(str, Enum):
     PAYMENT_RECEIPT_FULL = "payment_receipt_full"  # full payment — obligation fully settled
     OBLIGATION_CREATED   = "obligation_created"  # new bill created
     OBLIGATION_CANCELLED = "obligation_cancelled"  # bill cancelled/removed
+    COLLECTION_RECEIPT   = "collection_receipt"  # acknowledgement for collection point payment
     STATEMENT            = "statement"           # monthly/term statement
     CUSTOM               = "custom"
 

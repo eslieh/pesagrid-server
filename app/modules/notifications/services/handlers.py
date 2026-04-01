@@ -49,6 +49,7 @@ async def _dispatch(event_type: str, payload: dict) -> None:
             is_rollover=payload.get("is_rollover", False),
             previous_arrears=payload.get("previous_arrears", 0.0),
             penalty=payload.get("penalty", 0.0),
+            collection_point_name=payload.get("collection_point_name", ""),
         )
 
 
@@ -156,3 +157,14 @@ async def handle_obligation_due(envelope: MessageEnvelope) -> None:
 async def handle_obligation_cancelled(envelope: MessageEnvelope) -> None:
     logger.info("🗑️ obligation.cancelled — notifying payer of cancellation")
     await _dispatch("obligation.cancelled", envelope.payload)
+
+
+async def handle_payment_categorized(envelope: MessageEnvelope) -> None:
+    """Send acknowledgement SMS for a collection point payment (opt-in)."""
+    logger.info("📁 payment.categorized — sending acknowledgement SMS to payer")
+    # The payload already contains phone + collection_point_name from reconciliation.
+    # We inject collection_point_name into the context so templates / fallback can use it.
+    payload = envelope.payload
+    payload.setdefault("payer_name", payload.get("payer_name", "Customer"))
+    await _dispatch("payment.categorized", payload)
+    await _notify_business("payment.categorized", payload)
