@@ -94,3 +94,19 @@ async def handle_auth_password_reset(envelope: MessageEnvelope) -> None:
         f"<p>Expires in 1 hour. If you didn't request this, ignore this message.</p>"
     )
     await _send_auth_notification(payload, subject, sms_body, html_body)
+
+async def handle_auth_mfa(envelope: MessageEnvelope) -> None:
+    """Send a Two-Step Verification OTP to the user for sensitive actions."""
+    logger.info("🔒 auth.mfa_request — sending MFA code")
+    payload = envelope.payload
+    token = payload.get("token", "")
+
+    subject = "Your PesaGrid Verification Code"
+    sms_body = f"PesaGrid Verification Code: {token}. Valid for 15 minutes."
+    html_body = (
+        f"<h2>Sensitive Action Verification</h2>"
+        f"<p>You are about to modify sensitive business configurations on PesaGrid.</p>"
+        f"<p>Your verification code is: <strong>{token}</strong></p>"
+        f"<p>This code expires in 15 minutes. Do not share this code with anyone.</p>"
+    )
+    await _send_auth_notification(payload, subject, sms_body, html_body)

@@ -38,10 +38,14 @@ from app.modules.notifications.services.handlers import (
     handle_obligation_created,
     handle_obligation_due,
     handle_obligation_cancelled,
+    handle_config_psp_created,
+    handle_config_psp_deleted,
+    handle_config_collection_point_created,
 )
 from app.modules.auth.handlers import (
     handle_auth_welcome,
     handle_auth_password_reset,
+    handle_auth_mfa,
 )
 
 logging.basicConfig(
@@ -86,6 +90,10 @@ class PesagridWorker:
         self.consumer.register_handler(EventType.OBLIGATION_CANCELLED, handle_obligation_cancelled)
         self.consumer.register_handler(EventType.AUTH_WELCOME,         handle_auth_welcome)
         self.consumer.register_handler(EventType.AUTH_PASSWORD_RESET,  handle_auth_password_reset)
+        self.consumer.register_handler(EventType.AUTH_MFA_REQUEST,     handle_auth_mfa)
+        self.consumer.register_handler(EventType.CONFIG_PSP_CREATED,   handle_config_psp_created)
+        self.consumer.register_handler(EventType.CONFIG_PSP_DELETED,   handle_config_psp_deleted)
+        self.consumer.register_handler(EventType.CONFIG_COLLECTION_POINT_CREATED, handle_config_collection_point_created)
 
         self.running = True
         await self.consumer.start()
