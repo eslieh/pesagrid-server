@@ -14,7 +14,7 @@ from app.modules.obligations.models import (
 from app.modules.obligations.models import Payer
 from app.rabbitmq.publisher import BasePublisher
 from app.rabbitmq.types import EventType, Priority
-from app.core.timezone import now_nairobi
+from app.core.timezone import now_nairobi, make_aware
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def _run_billing_cycle_sync():
                         amount_paid=0,
                         balance=new_amount_due,
                         currency=old_ob.currency,
-                        due_date=config.next_due_date or now,
+                        due_date=make_aware(config.next_due_date) if config.next_due_date else now,
                         is_recurring=True,
                         status=ObligationStatus.PENDING,
                         meta=new_meta,
@@ -129,7 +129,8 @@ def _run_billing_cycle_sync():
                     
                     # 4. Move config to new obligation and update next_due_date
                     config.obligation_id = new_ob.id
-                    config.next_due_date = compute_next_due(config, config.next_due_date or now)
+                    base_due = make_aware(config.next_due_date) if config.next_due_date else now
+                    config.next_due_date = compute_next_due(config, base_due)
                     
                     db.commit()
                     processed_count += 1
@@ -137,7 +138,8 @@ def _run_billing_cycle_sync():
                     # 5. Prepare event for publication
                     payer = db.query(Payer).filter(Payer.id == new_ob.payer_id).first()
                     # Only publish the notification if this is the final catch-up obligation
-                    if payer and (config.next_due_date is None or config.next_due_date > now):
+                    config_next_due = make_aware(config.next_due_date) if config.next_due_date else None
+                    if payer and (config_next_due is None or config_next_due > now):
                         events_to_publish.append({
                             "event_type": EventType.OBLIGATION_CREATED,
                             "payload": {
@@ -215,7 +217,8 @@ def _run_reminders_cycle_sync():
                     continue
                     
                 # Determine reminder type based on due date
-                ob_date = ob.due_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                ob_due_aware = make_aware(ob.due_date)
+                ob_date = ob_due_aware.replace(hour=0, minute=0, second=0, microsecond=0)
                 if ob_date == target_upcoming:
                     rem_type = "upcoming"
                 elif ob_date == target_today:
