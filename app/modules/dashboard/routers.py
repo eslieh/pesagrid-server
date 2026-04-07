@@ -8,8 +8,9 @@ from datetime import datetime
 from app.core.dependancies import get_current_verified_user, get_db
 from app.modules.auth.models import User
 from app.modules.dashboard.schema import (
-    DashboardMetrics, PaymentByAccountSummary, PaymentHistoryResponse, 
-    NotificationPreferences, CollectionPointSummary, TrendResponse, PeakTimeResponse
+    DashboardMetrics, PaymentByAccountSummary, PaymentHistoryResponse,
+    NotificationPreferences, CollectionPointSummary, TrendResponse, PeakTimeResponse,
+    CollectionPointInsight,
 )
 from app.modules.dashboard.services import DashboardService
 
@@ -31,15 +32,21 @@ def get_dashboard_service(
 )
 async def get_metrics(
     collection_point_id: Optional[uuid.UUID] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
     service: DashboardService = Depends(get_dashboard_service)
 ):
     """
     Returns aggregated metrics for the dashboard:
     Total collected, total matched, total unmatched, and outstanding balances.
-    Supports filtering by collection_point_id.
+    Supports filtering by collection_point_id and date ranges.
     Cached via Redis for speed.
     """
-    return await service.get_metrics(collection_point_id=collection_point_id)
+    return await service.get_metrics(
+        collection_point_id=collection_point_id,
+        start_date=start_date,
+        end_date=end_date
+    )
 
 
 @dashboard_router.get(
@@ -168,3 +175,26 @@ def update_notification_prefs(
         return NotificationPreferences(**updated)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@dashboard_router.get(
+    "/collections/{cp_id}/insights",
+    response_model=CollectionPointInsight,
+    summary="Get intelligence snapshot for a collection point",
+)
+async def get_collection_point_insights(
+    cp_id: uuid.UUID,
+    service: DashboardService = Depends(get_dashboard_service),
+):
+    """
+    Returns a full intelligence snapshot for a single collection point:
+
+    - **pace** — goal progress, daily pace actual vs. required, projected final total
+      (only populated when `goal_amount` and `end_date` are set on the CP)
+    - **channels** — breakdown of collections by payment channel (psp_type)
+    - **compliance** — transactions above the CP's `compliance_threshold` flagged for review
+    - **insight_text** — one human-readable sentence summarising the key finding
+
+    Responses are cached for 60 seconds.
+    """
+    return await service.get_collection_point_insights(cp_id)
