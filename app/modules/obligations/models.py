@@ -28,9 +28,10 @@ class GroupType(str, Enum):
 class ObligationStatus(str, Enum):
     PENDING   = "pending"
     PARTIAL   = "partial"
-    PAID      = "paid"
+    SETTLED   = "settled"   # was "paid"
     OVERDUE   = "overdue"
-    CANCELLED = "cancelled"
+    VOIDED    = "voided"    # manual cancellation
+    ROLLED    = "rolled"    # auto-rolled to new cycle
 
 
 class RecurrenceType(str, Enum):
@@ -115,9 +116,10 @@ class Payer(Base):
     account_no    = Column(Text, nullable=True, index=True)   # M-PESA sub-account this payer uses
     identifier    = Column(Text, nullable=True)               # business-specific ID (student no, member no)
     notes         = Column(Text, nullable=True)
-    is_active     = Column(Boolean, default=True, nullable=False, index=True)
+    is_active      = Column(Boolean, default=True, nullable=False, index=True)
+    credit_balance = Column(Numeric(18, 2), default=0, nullable=False)
     # Tenant-defined custom fields: e.g. {"grade": "7A", "guardian": "John Doe", "credit_limit": 50000}
-    meta          = Column(JSONB, nullable=True, default=dict)
+    meta           = Column(JSONB, nullable=True, default=dict)
     created_by    = Column(UUID, nullable=False)
     created_at    = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
     updated_at    = Column(DateTime(timezone=True), default=now_nairobi, onupdate=now_nairobi, nullable=False)
@@ -161,6 +163,7 @@ class Obligation(Base):
     due_date       = Column(DateTime(timezone=True), nullable=True)
     status         = Column(SQLEnum(ObligationStatus), default=ObligationStatus.PENDING, nullable=False, index=True)
     is_recurring   = Column(Boolean, default=False, nullable=False, index=True)
+    status_reason  = Column(Text, nullable=True)                  # e.g. "Automatically rolled to new cycle", "Manual void"
     # Tenant-defined custom fields: e.g. {"invoice_no": "INV-001", "penalty": 500, "term": "Term 1 2025"}
     meta           = Column(JSONB, nullable=True, default=dict)
     created_by     = Column(UUID, nullable=False, index=True)

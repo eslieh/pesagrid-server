@@ -75,11 +75,12 @@ class PayerResponse(BaseModel):
     account_no:    Optional[str]
     identifier:    Optional[str]
     notes:         Optional[str]
-    is_active:     bool
-    meta:          Optional[dict]
-    created_by:    uuid.UUID
-    created_at:    datetime
-    updated_at:    datetime
+    is_active:      bool
+    credit_balance: float
+    meta:           Optional[dict]
+    created_by:     uuid.UUID
+    created_at:     datetime
+    updated_at:     datetime
 
 
 class PayerListResponse(BaseModel):
@@ -160,6 +161,32 @@ class ObligationCreate(BaseModel):
         return v
 
 
+class UnifiedPayerObligationCreate(BaseModel):
+    """
+    Person-centric creation: Register a person and their first invoice in one flow.
+    """
+    # Payer details
+    name:       str
+    phone:      Optional[str] = None
+    email:      Optional[str] = None
+    account_no: Optional[str] = None
+    identifier: Optional[str] = None
+    group_id:   Optional[uuid.UUID] = None
+    
+    # Obligation details
+    amount:       float
+    description:  Optional[str] = None
+    due_date:     Optional[datetime] = None
+    currency:     str = "KES"
+    
+    # Recurring details
+    is_recurring: bool = False
+    recurring:    Optional[RecurringConfigCreate] = None
+    
+    # Flags
+    send_notification: bool = True
+
+
 class ObligationUpdate(BaseModel):
     description:  Optional[str]             = None
     amount_due:   Optional[float]           = None
@@ -182,6 +209,7 @@ class ObligationResponse(BaseModel):
     currency:        str
     due_date:        Optional[datetime]
     status:          ObligationStatus
+    status_reason:   Optional[str]     = None
     is_recurring:    bool
     meta:            Optional[dict]
     created_by:      uuid.UUID
@@ -194,6 +222,40 @@ class ObligationResponse(BaseModel):
 class ObligationListResponse(BaseModel):
     total: int
     items: List[ObligationResponse]
+
+
+class RecurringPreviewResponse(BaseModel):
+    preview_sentence: str
+
+
+class PayerLedgerResponse(BaseModel):
+    payer:          PayerResponse
+    obligations:    List[ObligationResponse]
+    total_due:      float
+    total_paid:     float
+    balance:        float
+    credit_balance: float
+
+
+class ObligationLedgerItem(ObligationResponse):
+    """Rich obligation data for the ledger with descriptive strings."""
+    status_description: str
+
+
+class PayerLedgerGroup(BaseModel):
+    """Groups a payer with their filtered obligations for the dashboard."""
+    payer:        PayerResponse
+    summary_text: str
+    total_amount: float
+    status:       str  # top-level status for the group (e.g. "overdue")
+    obligations:  List[ObligationLedgerItem]
+
+
+class GlobalLedgerResponse(BaseModel):
+    """The full dashboard response with grouped payers and filter counts."""
+    total_payers: int
+    counts:       dict  # e.g. {"overdue": 1, "pending": 2, "paid_this_month": 5}
+    items:        List[PayerLedgerGroup]
 
 
 # ─── NotificationTemplate Schemas ─────────────────────────────────────────────

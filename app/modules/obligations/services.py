@@ -20,8 +20,10 @@ from app.modules.obligations.schema import (
     PayerGroupCreate, PayerGroupUpdate,
     RecurringConfigUpdate,
     NotificationTemplateCreate, NotificationTemplateUpdate,
+    UnifiedPayerObligationCreate
 )
 from app.rabbitmq import BasePublisher, EventType, Priority
+from app.core.timezone import now_nairobi
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +113,51 @@ class ObligationService:
             return None
 
         return None
+
+    def _apply_credit_to_obligation(self, payer: Payer, obligation: Obligation):
+        """Consume any existing payer credit to settle or partially pay a new obligation."""
+        from decimal import Decimal
+        credit = Decimal(str(payer.credit_balance or 0))
+        if credit <= 0:
+            return
+
+        needed = Decimal(str(obligation.balance))
+        usage = min(credit, needed)
+
+        obligation.amount_paid = Decimal(str(obligation.amount_paid)) + usage
+        obligation.balance = Decimal(str(obligation.amount_due)) - Decimal(str(obligation.amount_paid))
+        payer.credit_balance = credit - usage
+
+        if obligation.balance <= 0:
+            obligation.status = ObligationStatus.SETTLED
+            obligation.balance = Decimal("0")
+        elif usage > 0:
+            obligation.status = ObligationStatus.PARTIAL
+
+        logger.info(f"💳 Applied {usage} credit from Payer {payer.id} to Obligation {obligation.id}")
+
+    def get_recurring_preview(self, rt: RecurrenceType, amount: float, start_date: datetime, interval_days: int = None, day_of_month: int = None, day_of_week: int = None) -> str:
+        """
+        Generates a human-readable sentence explaining the recurring schedule.
+        Example: "will bill KES 464 every week starting April 3, previous cycle closes automatically when the new one starts."
+        """
+        import calendar
+        
+        freq = ""
+        if rt == RecurrenceType.MONTHLY:
+            day = day_of_month or start_date.day
+            suffix = 'th' if 11 <= day <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+            freq = f"every month on the {day}{suffix}"
+        elif rt == RecurrenceType.WEEKLY:
+            day_name = calendar.day_name[day_of_week] if day_of_week is not None else calendar.day_name[start_date.weekday()]
+            freq = f"every week on {day_name}"
+        elif rt == RecurrenceType.CUSTOM:
+            freq = f"every {interval_days} days"
+        elif rt == RecurrenceType.TERM:
+            freq = "every school term"
+
+        start_fmt = start_date.strftime("%B %d")
+        return f"will bill KES {amount:,.0f} {freq} starting {start_fmt}, previous cycle closes automatically when the new one starts."
 
     # ─── PayerGroup CRUD ─────────────────────────────────────────────────────
 
@@ -318,13 +365,299 @@ class ObligationService:
             )
             self.db.add(config)
 
+        # 4. Auto-apply existing credit
+        self._apply_credit_to_obligation(payer, obligation)
+
         self.db.commit()
         self.db.refresh(obligation)
 
-        # Publish event — reuse already-loaded payer object, don't re-query
+        # Publish event
         await self._publish_obligation_created(obligation, payer)
 
         return obligation
+
+    async def create_unified_payer_obligation(self, data: UnifiedPayerObligationCreate) -> Tuple[Payer, Obligation]:
+        """
+        Merged flow: Person + Invoice + Recurring in one transaction.
+        """
+        # 1. Payer creation logic (re-using logic from create_payer)
+        account_no = data.account_no.strip().upper() if data.account_no else None
+        
+        # Check for existing Payer by account_no or phone if provided
+        payer = None
+        if account_no:
+            payer = self.db.query(Payer).filter(
+                Payer.collection_id == self.collection_id,
+                Payer.account_no == account_no
+            ).first()
+        
+        if not payer and data.phone:
+            payer = self.db.query(Payer).filter(
+                Payer.collection_id == self.collection_id,
+                Payer.phone == data.phone
+            ).first()
+
+        if not payer:
+            # Create new payer
+            payer = Payer(
+                collection_id=self.collection_id,
+                group_id=data.group_id,
+                name=data.name,
+                phone=data.phone,
+                email=data.email,
+                account_no=account_no,
+                identifier=data.identifier,
+                created_by=self.current_user_id,
+            )
+            self.db.add(payer)
+            self.db.flush()
+        else:
+            # Update existing payer name/email if they were empty
+            if not payer.email and data.email: payer.email = data.email
+            if data.name and payer.name != data.name: payer.name = data.name
+
+        # 2. Obligation creation
+        obligation = Obligation(
+            collection_id=self.collection_id,
+            payer_id=payer.id,
+            account_no=payer.account_no or account_no,
+            description=data.description,
+            amount_due=data.amount,
+            amount_paid=0,
+            balance=data.amount,
+            currency=data.currency,
+            due_date=data.due_date or (data.recurring.start_date if data.is_recurring and data.recurring else None),
+            is_recurring=data.is_recurring,
+            status=ObligationStatus.PENDING,
+            created_by=self.current_user_id,
+        )
+        self.db.add(obligation)
+        self.db.flush()
+
+        # 3. Recurring config
+        if data.is_recurring and data.recurring:
+            rc = data.recurring
+            next_due = self._compute_next_due(rc, rc.start_date)
+            config = RecurringConfig(
+                obligation_id=obligation.id,
+                recurrence_type=rc.recurrence_type,
+                interval_days=rc.interval_days,
+                day_of_month=rc.day_of_month,
+                day_of_week=rc.day_of_week,
+                start_date=rc.start_date,
+                end_date=rc.end_date,
+                next_due_date=next_due,
+                grace_period_days=rc.grace_period_days,
+                auto_generate=rc.auto_generate,
+            )
+            self.db.add(config)
+
+        # 4. Auto-apply existing credit
+        self._apply_credit_to_obligation(payer, obligation)
+
+        self.db.commit()
+        self.db.refresh(payer)
+        self.db.refresh(obligation)
+
+        await self._publish_obligation_created(obligation, payer)
+        return payer, obligation
+
+    async def get_payer_ledger(self, payer_id: uuid.UUID) -> dict:
+        """
+        Unified statement for a person: all invoices and their status.
+        Enhanced with rich status descriptions.
+        """
+        payer = self._get_payer_or_404(payer_id)
+        obs = (
+            self.db.query(Obligation)
+            .filter(Obligation.payer_id == payer_id)
+            .order_by(Obligation.created_at.desc())
+            .all()
+        )
+        
+        rich_obs = []
+        for ob in obs:
+            rich_obs.append(self._enrich_obligation(ob))
+
+        total_due  = sum(float(ob.amount_due) for ob in obs)
+        total_paid = sum(float(ob.amount_paid) for ob in obs)
+        balance    = sum(float(ob.balance) for ob in obs)
+        
+        return {
+            "payer": payer,
+            "obligations": rich_obs,
+            "total_due": total_due,
+            "total_paid": total_paid,
+            "balance": balance,
+            "credit_balance": float(payer.credit_balance),
+        }
+
+    def _enrich_obligation(self, ob: Obligation) -> dict:
+        """Helper to create the rich descriptive strings for the ledger."""
+        desc = ""
+        if ob.status == ObligationStatus.OVERDUE:
+            due_fmt = ob.due_date.strftime("%b %d") if ob.due_date else "unknown date"
+            desc = f"Was due {due_fmt} — no payment received yet"
+        elif ob.status == ObligationStatus.ROLLED:
+            close_fmt = ob.updated_at.strftime("%b %d")
+            desc = f"Auto-closed {close_fmt} — replaced by current cycle above"
+        elif ob.status == ObligationStatus.PARTIAL:
+            paid_fmt = f"KES {ob.amount_paid:,.2f}"
+            bal_fmt = f"KES {ob.balance:,.2f}"
+            desc = f"{paid_fmt} received — {bal_fmt} still outstanding"
+        elif ob.status == ObligationStatus.SETTLED:
+            settle_fmt = ob.updated_at.strftime("%b %d")
+            desc = f"Paid in full {settle_fmt}"
+        else:
+            if ob.due_date:
+                desc = f"Due {ob.due_date.strftime('%b %d, %Y')}"
+            else:
+                desc = "Awaiting payment"
+
+        # Construct dictionary that matches ObligationLedgerItem schema
+        return {
+            "id": str(ob.id),
+            "collection_id": str(ob.collection_id),
+            "payer_id": str(ob.payer_id),
+            "account_no": ob.account_no,
+            "description": ob.description,
+            "amount_due": float(ob.amount_due),
+            "amount_paid": float(ob.amount_paid),
+            "balance": float(ob.balance),
+            "currency": ob.currency,
+            "due_date": ob.due_date.isoformat() if ob.due_date else None,
+            "status": ob.status.value,
+            "status_reason": ob.status_reason,
+            "is_recurring": ob.is_recurring,
+            "meta": ob.meta,
+            "created_by": str(ob.created_by),
+            "created_at": ob.created_at.isoformat(),
+            "updated_at": ob.updated_at.isoformat(),
+            "status_description": desc
+        }
+
+    async def get_global_ledger(self, 
+        status_filter: Optional[ObligationStatus] = None,
+        is_recurring: Optional[bool] = None,
+        overdue_only: bool = False,
+        this_month: bool = False
+    ) -> dict:
+        """
+        Global dashboard view: Grouped by Payer with filters.
+        """
+        q = self.db.query(Obligation).filter(Obligation.collection_id == self.collection_id)
+        
+        # 1. Global counts (unfiltered)
+        # 1. Global counts (Database-level aggregation)
+        status_counts = (
+            self.db.query(Obligation.status, func.count(Obligation.id))
+            .filter(Obligation.collection_id == self.collection_id)
+            .group_by(Obligation.status)
+            .all()
+        )
+        status_map = {s.value: count for s, count in status_counts}
+        
+        recurring_count = (
+            self.db.query(func.count(Obligation.id))
+            .filter(Obligation.collection_id == self.collection_id, Obligation.is_recurring == True)
+            .scalar()
+        )
+
+        counts = {
+            "all": sum(status_map.values()),
+            "overdue": status_map.get(ObligationStatus.OVERDUE, 0),
+            "pending": status_map.get(ObligationStatus.PENDING, 0) + status_map.get(ObligationStatus.PARTIAL, 0),
+            "settled": status_map.get(ObligationStatus.SETTLED, 0),
+            "recurring": recurring_count,
+        }
+
+        # 2. Applying filters
+        if status_filter:
+            q = q.filter(Obligation.status == status_filter)
+        if is_recurring is not None:
+            q = q.filter(Obligation.is_recurring == is_recurring)
+        if overdue_only:
+            q = q.filter(Obligation.status == ObligationStatus.OVERDUE)
+        if this_month:
+            now = now_nairobi()
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            q = q.filter(Obligation.created_at >= start)
+
+        # Add Eager Loading to fix N+1 (Payer and its Group)
+        q = q.options(
+            joinedload(Obligation.payer).joinedload(Payer.group)
+        )
+        
+        obs = q.order_by(Obligation.created_at.desc()).all()
+
+        # 3. Grouping by Payer
+        payer_map = {}
+        for ob in obs:
+            p_id = ob.payer_id
+            if p_id not in payer_map:
+                payer_map[p_id] = {
+                    "payer": ob.payer,
+                    "obligations": [],
+                    "total_amount": 0,
+                    "overdue_count": 0,
+                    "pending_count": 0,
+                    "status": "pending"
+                }
+            
+            # Enrich the obligation
+            rich_ob = ob
+            rich_ob.status_description = self._get_status_desc(ob) # Dynamic attribute
+            
+            payer_map[p_id]["obligations"].append(rich_ob)
+            payer_map[p_id]["total_amount"] += float(ob.balance)
+            if ob.status == ObligationStatus.OVERDUE:
+                payer_map[p_id]["overdue_count"] += 1
+                payer_map[p_id]["status"] = "overdue"
+            elif ob.status in (ObligationStatus.PENDING, ObligationStatus.PARTIAL):
+                payer_map[p_id]["pending_count"] += 1
+
+        items = []
+        for p_id, data in payer_map.items():
+            summary = ""
+            if data["overdue_count"] > 0:
+                summary = f"No group · {data['overdue_count']} overdue invoice"
+            elif data["pending_count"] > 0:
+                summary = f"No group · {data['pending_count']} pending invoice"
+            else:
+                summary = "All settled"
+            
+            # If they have a group, use it
+            if data["payer"].group:
+                summary = summary.replace("No group", data["payer"].group.name)
+
+            items.append({
+                "payer": data["payer"],
+                "summary_text": summary,
+                "total_amount": data["total_amount"],
+                "status": data["status"],
+                "obligations": data["obligations"]
+            })
+
+        return {
+            "total_payers": len(items),
+            "counts": counts,
+            "items": items
+        }
+
+    def _get_status_desc(self, ob: Obligation) -> str:
+        """Logic for rich description based on status."""
+        if ob.status == ObligationStatus.OVERDUE:
+            due_fmt = ob.due_date.strftime("%b %d") if ob.due_date else "unknown"
+            return f"Was due {due_fmt} — no payment received yet"
+        elif ob.status == ObligationStatus.ROLLED:
+            close_fmt = ob.updated_at.strftime("%b %d")
+            return f"Auto-closed {close_fmt} — replaced by current cycle above"
+        elif ob.status == ObligationStatus.PARTIAL:
+            return f"KES {ob.amount_paid:,.2f} received — KES {ob.balance:,.2f} still outstanding"
+        elif ob.status == ObligationStatus.SETTLED:
+            return f"Paid in full {ob.updated_at.strftime('%b %d')}"
+        
+        return f"Due {ob.due_date.strftime('%b %d')}" if ob.due_date else "Pending"
 
     async def _publish_obligation_created(self, obligation: Obligation, payer: Payer):
         try:
@@ -435,7 +768,7 @@ class ObligationService:
 
     async def update_obligation(self, obligation_id: uuid.UUID, data: ObligationUpdate) -> Obligation:
         ob = self._get_obligation_or_404(obligation_id)
-        if ob.status in (ObligationStatus.PAID, ObligationStatus.CANCELLED):
+        if ob.status in (ObligationStatus.SETTLED, ObligationStatus.VOIDED, ObligationStatus.ROLLED):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cannot update an obligation with status '{ob.status}'"
@@ -459,12 +792,13 @@ class ObligationService:
         self.db.refresh(ob)
         return ob
 
-    async def cancel_obligation(self, obligation_id: uuid.UUID) -> Obligation:
+    async def cancel_obligation(self, obligation_id: uuid.UUID, reason: str = "Manual void") -> Obligation:
         ob = self._get_obligation_or_404(obligation_id)
-        if ob.status == ObligationStatus.CANCELLED:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Obligation already cancelled")
+        if ob.status in (ObligationStatus.VOIDED, ObligationStatus.ROLLED):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Obligation already closed")
         
-        ob.status = ObligationStatus.CANCELLED
+        ob.status = ObligationStatus.VOIDED
+        ob.status_reason = reason
         
         # Stop future invoices if this was a recurring obligation setup
         if ob.recurring_config:
@@ -493,6 +827,7 @@ class ObligationService:
                 "balance": float(ob.balance),
                 "email": payer_email,
                 "phone": payer_phone,
+                "reason": reason,
             }
         )
 
@@ -500,10 +835,10 @@ class ObligationService:
 
     async def delete_obligation(self, obligation_id: uuid.UUID) -> None:
         ob = self._get_obligation_or_404(obligation_id)
-        if ob.status == ObligationStatus.PAID:
+        if ob.status == ObligationStatus.SETTLED:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot delete a fully paid obligation. Cancel it instead."
+                detail="Cannot delete a fully paid obligation. Void it instead."
             )
         self.db.delete(ob)
         self.db.commit()

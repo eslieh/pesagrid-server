@@ -1,20 +1,23 @@
 import uuid
-from typing import Optional, Dict, Any
+from datetime import datetime
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, Query, Request, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 import logging
 
 from app.core.dependancies import get_current_verified_user, get_db, verify_mfa
 from app.modules.auth.models import User
-from app.modules.ingestion.models import TransactionStatus
+from app.modules.ingestion.models import TransactionStatus, CollectionPointType
 from app.modules.ingestion.schema import (
     TransactionResponse, TransactionListResponse, ManualPaymentCreate,
     MpesaC2BCallback, MpesaSTKCallback,
-    CollectionPointCreate, CollectionPointUpdate, CollectionPointRead
+    CollectionPointCreate, CollectionPointUpdate, CollectionPointRead,
+    CollectionPointPSPCreate, CollectionPointPSPRead,
+    TransactionEnrichedListResponse,
+    CollectionPointListResponse,
 )
 from app.modules.ingestion.services import IngestionService, CollectionPointService
 from app.rabbitmq import BasePublisher, EventType, Priority
-
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +42,7 @@ def get_collection_point_service(
 async def publish_config_event(event_type: EventType, payload: dict):
     publisher = BasePublisher("ingestion-service")
     await publisher.publish_event(event_type, payload)
-    
+
 def get_ingestion_service(
     collection_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -76,14 +79,12 @@ async def mpesa_callback(
     The raw payload is published to RabbitMQ and the worker picks it up
     asynchronously to normalize, ingest, and reconcile.
     """
-    # ── 1. Parse body ───────────────────────────────────────────────────────
     try:
         payload: Dict[str, Any] = await request.json()
     except Exception:
         logger.warning(f"M-PESA webhook received non-JSON body for collection {collection_id}")
         return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-    # ── 2. Publish raw payload to worker ────────────────────────────────────
     try:
         publisher = BasePublisher(service_name="ingest-gateway")
         await publisher.publish_event(
@@ -95,10 +96,8 @@ async def mpesa_callback(
             priority=Priority.HIGH,
         )
     except Exception as e:
-        # Log but still ACK — never let Safaricom retry aggressively
         logger.error(f"Failed to queue M-PESA callback for {collection_id}: {e}")
 
-    # ── 3. Acknowledge immediately ───────────────────────────────────────────
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
@@ -145,25 +144,52 @@ async def create_manual_payment(
 
 @transactions_router.get(
     "/",
-    response_model=TransactionListResponse,
+    response_model=TransactionEnrichedListResponse,
     summary="List transactions",
+    description=(
+        "Returns a paginated, filterable, sortable list of transactions with inline "
+        "match context (matched payer, obligation, confidence score, and match reasons). "
+        "Use `enriched=false` for a lightweight plain response."
+    ),
 )
 def list_transactions(
-    account_no:    Optional[str]              = Query(None, description="Filter by account number"),
-    psp_type:      Optional[str]              = Query(None, description="Filter by PSP (mpesa, kcb…)"),
-    txn_status:    Optional[TransactionStatus] = Query(None, alias="status"),
-    skip:          int                        = Query(0, ge=0),
-    limit:         int                        = Query(50, ge=1, le=200),
+    account_no:          Optional[str]               = Query(None, description="Filter by account number"),
+    psp_type:            Optional[str]               = Query(None, description="Filter by PSP (mpesa, kcb…)"),
+    txn_status:          Optional[TransactionStatus] = Query(None, alias="status"),
+    collection_point_id: Optional[uuid.UUID]         = Query(None, description="Filter by collection point"),
+    start_date:          Optional[datetime]          = Query(None, description="Filter from date (ingested_at ≥)"),
+    end_date:            Optional[datetime]          = Query(None, description="Filter to date (ingested_at ≤)"),
+    amount_min:          Optional[float]             = Query(None, description="Minimum transaction amount"),
+    amount_max:          Optional[float]             = Query(None, description="Maximum transaction amount"),
+    phone:               Optional[str]               = Query(None, description="Filter by phone number (254XXXXXXXXX)"),
+    psp_ref:             Optional[str]               = Query(None, description="Filter by transaction reference ID"),
+    psp_config_id:       Optional[uuid.UUID]         = Query(None, description="Filter by specific payment channel"),
+    search:              Optional[str]               = Query(None, description="Smart search across ref, phone, account, name"),
+    sort:                str                         = Query("date_desc", regex="^(date_desc|date_asc|amount_desc|amount_asc)$"),
+    skip:                int                         = Query(0, ge=0),
+    limit:               int                         = Query(50, ge=1, le=200),
     service: IngestionService = Depends(get_authed_service),
 ):
-    total, items = service.list_transactions(
+    total, items = service.list_transactions_enriched(
         account_no=account_no,
         psp_type=psp_type,
         txn_status=txn_status,
+        collection_point_id=collection_point_id,
+        start_date=start_date,
+        end_date=end_date,
+        amount_min=amount_min,
+        amount_max=amount_max,
+        phone=phone,
+        psp_ref=psp_ref,
+        psp_config_id=psp_config_id,
+        search=search,
+        sort=sort,
         skip=skip,
         limit=limit,
     )
-    return TransactionListResponse(total=total, items=items)
+    return TransactionEnrichedListResponse(total=total, items=items)
+
+
 
 
 @transactions_router.get(
@@ -212,13 +238,41 @@ def create_collection_point(
 
 @collection_points_router.get(
     "/",
-    response_model=list[CollectionPointRead],
+    response_model=CollectionPointListResponse,
     summary="List collection points",
 )
 def list_collection_points(
+    search: Optional[str] = Query(None, description="Search by name, account_no, or description"),
+    cp_type: Optional[CollectionPointType] = Query(None, description="Filter by instrument type"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     service: CollectionPointService = Depends(get_collection_point_service),
 ):
-    return service.list_collection_points()
+    """
+    List all collection points for the business.
+    Supports advanced filtering by type and search strings.
+    """
+    total, items = service.list_collection_points(
+        search=search,
+        cp_type=cp_type,
+        is_active=is_active,
+        skip=skip,
+        limit=limit,
+    )
+    return CollectionPointListResponse(total=total, items=items)
+
+
+@collection_points_router.get(
+    "/{cp_id}",
+    response_model=CollectionPointRead,
+    summary="Get collection point details",
+)
+def get_collection_point(
+    cp_id: uuid.UUID,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    return service.get_collection_point(cp_id)
 
 
 @collection_points_router.get(
@@ -256,3 +310,48 @@ def delete_collection_point(
 ):
     service.delete_collection_point(cp_id)
 
+
+# ── PSP channel links ─────────────────────────────────────────────────────────
+
+@collection_points_router.post(
+    "/{cp_id}/channels",
+    response_model=CollectionPointPSPRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Link a PSP channel to a collection point",
+)
+def add_psp_channel(
+    cp_id: uuid.UUID,
+    data: CollectionPointPSPCreate,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    """
+    Declare that this collection point receives payments via the given PSP config.
+    Used purely for analytics channel breakdown — routing still uses account_no.
+    """
+    return service.add_psp(cp_id, data)
+
+
+@collection_points_router.get(
+    "/{cp_id}/channels",
+    response_model=List[CollectionPointPSPRead],
+    summary="List PSP channels linked to a collection point",
+)
+def list_psp_channels(
+    cp_id: uuid.UUID,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    """Returns all payment channels declared for this collection point."""
+    return service.list_psps(cp_id)
+
+
+@collection_points_router.delete(
+    "/{cp_id}/channels/{psp_config_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Unlink a PSP channel from a collection point",
+)
+def remove_psp_channel(
+    cp_id: uuid.UUID,
+    psp_config_id: uuid.UUID,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    service.remove_psp(cp_id, psp_config_id)
