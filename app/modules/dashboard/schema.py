@@ -109,3 +109,30 @@ class CollectionPointInsight(BaseModel):
     channels:      List[ChannelBreakdownItem]        = []
     compliance:    List[LargeTransactionFlag]        = []
     insight_text:  str
+
+
+# ─── Global Search ────────────────────────────────────────────────────────────
+
+from enum import Enum
+
+class SearchResultType(str, Enum):
+    PAYER       = "payer"
+    INVOICE     = "invoice"
+    TRANSACTION = "transaction"
+
+class MiniCardData(BaseModel):
+    balance:           float = 0.0
+    last_payment_date: Optional[datetime] = None
+    status:            Optional[str] = None
+
+class SearchResult(BaseModel):
+    type:        SearchResultType
+    title:       str
+    subtitle:    Optional[str] = None
+    identifier:  str
+    avatar_text: str
+    link_id:     UUID
+    meta:        MiniCardData
+
+class DashboardSearchResponse(BaseModel):
+    items: List[SearchResult]

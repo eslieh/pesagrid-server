@@ -587,3 +587,98 @@ class DashboardService:
                 logger.error(f"Cache write error (insights): {e}")
 
         return result
+
+    async def global_search(self, query: str) -> List[dict]:
+        """
+        Search across Payers, Obligations (Invoices), and Transactions.
+        Returns a unified list of SearchResult-compatible dicts.
+        """
+        if not query or len(query) < 2:
+            return []
+
+        search_results = []
+        q_term = f"%{query}%"
+
+        # 1. Search Payers (name, phone, account_no)
+        from app.modules.obligations.models import Payer
+        payers = (
+            self.db.query(Payer)
+            .filter(
+                Payer.collection_id == self.collection_id,
+                (Payer.name.ilike(q_term)) | (Payer.phone.ilike(q_term)) | (Payer.account_no.ilike(q_term))
+            )
+            .limit(10)
+            .all()
+        )
+        for p in payers:
+            # Find last payment for this payer
+            last_trx = (
+                self.db.query(Transaction)
+                .filter(Transaction.collection_id == self.collection_id, Transaction.account_no == p.account_no)
+                .order_by(Transaction.ingested_at.desc())
+                .first()
+            )
+            
+            search_results.append({
+                "type": "payer",
+                "title": p.name,
+                "subtitle": p.phone or p.account_no,
+                "identifier": p.phone or p.account_no or "No Ref",
+                "avatar_text": p.name[0].upper() if p.name else "P",
+                "link_id": p.id,
+                "meta": {
+                    "status": "Active" if p.is_active else "Inactive",
+                    "last_payment_date": last_trx.ingested_at.isoformat() if last_trx else None
+                }
+            })
+
+        # 2. Search Obligations (Invoices) by account_no or description
+        from app.modules.obligations.models import Obligation
+        obs = (
+            self.db.query(Obligation)
+            .filter(
+                Obligation.collection_id == self.collection_id,
+                (Obligation.account_no.ilike(q_term)) | (Obligation.description.ilike(q_term))
+            )
+            .limit(10)
+            .all()
+        )
+        for ob in obs:
+            search_results.append({
+                "type": "invoice",
+                "title": ob.description or f"Invoice {ob.account_no}",
+                "subtitle": f"Account: {ob.account_no}",
+                "identifier": ob.account_no,
+                "avatar_text": "INV",
+                "link_id": ob.id,
+                "meta": {
+                    "balance": float(ob.balance),
+                    "status": ob.status.value
+                }
+            })
+
+        # 3. Search Transactions (psp_ref, phone)
+        trxs = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.collection_id == self.collection_id,
+                (Transaction.psp_ref.ilike(q_term)) | (Transaction.phone.ilike(q_term))
+            )
+            .limit(10)
+            .all()
+        )
+        for t in trxs:
+            search_results.append({
+                "type": "transaction",
+                "title": f"KES {t.amount:,.0f} from {t.payer_name or t.phone}",
+                "subtitle": f"Ref: {t.psp_ref}",
+                "identifier": t.psp_ref or t.phone,
+                "avatar_text": "TRX",
+                "link_id": t.id,
+                "meta": {
+                    "status": t.status.value,
+                    "last_payment_date": t.ingested_at.isoformat()
+                }
+            })
+
+        return search_results

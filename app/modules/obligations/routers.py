@@ -13,11 +13,15 @@ from app.modules.obligations.schema import (
     PayerCreate, PayerUpdate, PayerResponse, PayerListResponse,
     # Obligations
     ObligationCreate, ObligationUpdate, ObligationResponse, ObligationListResponse,
+    UnifiedPayerObligationCreate, PayerLedgerResponse, RecurringPreviewResponse,
     RecurringConfigUpdate,
     # Templates
     NotificationTemplateCreate, NotificationTemplateUpdate,
     NotificationTemplateResponse, NotificationTemplateListResponse,
+    RecurrenceType,
+    GlobalLedgerResponse, PayerLedgerResponse
 )
+from datetime import datetime
 from app.modules.obligations.services import ObligationService
 
 obligations_router = APIRouter(tags=["Obligations"])
@@ -144,6 +148,29 @@ async def create_payer(
     return await service.create_payer(data)
 
 
+@obligations_router.post(
+    "/unified-create",
+    response_model=ObligationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create payer and first invoice (Person-centric flow)",
+)
+async def create_unified(
+    data: UnifiedPayerObligationCreate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Person-centric merged flow:
+    - Creates or updates a Payer
+    - Creates their first Obligation
+    - Sets up recurring schedule if provided
+    - Sends an automated SMS/email notification (optional, defaults to true)
+    
+    Returns the created obligation for "Save & view" context.
+    """
+    _, ob = await service.create_unified_payer_obligation(data)
+    return ob
+
+
 @obligations_router.get(
     "/payers",
     response_model=PayerListResponse,
@@ -158,6 +185,23 @@ async def list_payers(
 ):
     total, items = await service.list_payers(group_id=group_id, is_active=is_active, skip=skip, limit=limit)
     return PayerListResponse(total=total, items=items)
+
+
+@obligations_router.get(
+    "/payers/{payer_id}/ledger",
+    response_model=PayerLedgerResponse,
+    summary="Get full person-centric statement (Ledger)",
+)
+async def get_payer_ledger(
+    payer_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Returns a unified ledger for a customer:
+    - Every invoice they owe or have paid
+    - Aggregate balance (Total Due vs Total Paid)
+    """
+    return await service.get_payer_ledger(payer_id)
 
 
 @obligations_router.get(
@@ -321,6 +365,31 @@ async def create_obligation(
 
 
 @obligations_router.get(
+    "/recurring-preview",
+    response_model=RecurringPreviewResponse,
+    summary="Generate plain-language preview of recurring schedule",
+)
+async def get_recurring_preview(
+    type:     RecurrenceType  = Query(...),
+    amount:   float           = Query(...),
+    start:    datetime        = Query(...),
+    interval: Optional[int]   = Query(None),
+    dom:      Optional[int]   = Query(None),
+    dow:      Optional[int]   = Query(None),
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Returns a human-readable sentence for the UI form:
+    'will bill KES 500 every week on Monday starting April 1...'
+    """
+    sentence = service.get_recurring_preview(
+        rt=type, amount=amount, start_date=start,
+        interval_days=interval, day_of_month=dom, day_of_week=dow
+    )
+    return RecurringPreviewResponse(preview_sentence=sentence)
+
+
+@obligations_router.get(
     "/",
     response_model=ObligationListResponse,
     summary="List obligations",
@@ -343,6 +412,30 @@ async def list_obligations(
         limit=limit,
     )
     return ObligationListResponse(total=total, items=items)
+
+
+@obligations_router.get(
+    "/ledger",
+    response_model=GlobalLedgerResponse,
+    summary="Global filtered ledger",
+)
+async def get_global_ledger(
+    status: Optional[ObligationStatus] = Query(None),
+    is_recurring: Optional[bool] = Query(None),
+    overdue_only: bool = Query(False),
+    this_month: bool = Query(False),
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Powerful dashboard view: Grouped by Payer with filters
+    (All, Overdue, Pending, Paid this Month, Recurring).
+    """
+    return await service.get_global_ledger(
+        status_filter=status,
+        is_recurring=is_recurring,
+        overdue_only=overdue_only,
+        this_month=this_month
+    )
 
 
 @obligations_router.get(
@@ -396,10 +489,13 @@ async def update_recurring_config(
 )
 async def cancel_obligation(
     obligation_id: uuid.UUID,
+    reason: str = Query("Manual void", description="Why is this being voided?"),
     service: ObligationService = Depends(get_service),
 ):
-    """Soft-cancel — record is preserved for audit."""
-    return await service.cancel_obligation(obligation_id)
+    """Refined cancellation: records the specific reason for audit."""
+    return await service.cancel_obligation(obligation_id, reason=reason)
+
+
 
 
 @obligations_router.delete(

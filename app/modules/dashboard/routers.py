@@ -10,7 +10,7 @@ from app.modules.auth.models import User
 from app.modules.dashboard.schema import (
     DashboardMetrics, PaymentByAccountSummary, PaymentHistoryResponse,
     NotificationPreferences, CollectionPointSummary, TrendResponse, PeakTimeResponse,
-    CollectionPointInsight,
+    CollectionPointInsight, DashboardSearchResponse,
 )
 from app.modules.dashboard.services import DashboardService
 
@@ -199,3 +199,20 @@ async def get_collection_point_insights(
     Responses are cached for 60 seconds.
     """
     return await service.get_collection_point_insights(cp_id)
+
+
+@dashboard_router.get(
+    "/search",
+    response_model=DashboardSearchResponse,
+    summary="Global search across payers, invoices, and transactions",
+)
+async def global_search(
+    q: str = Query(..., min_length=2),
+    service: DashboardService = Depends(get_dashboard_service)
+):
+    """
+    Powerful multi-entity search for the person-centric navigation bar.
+    Searches by name, phone, account number, or payment reference.
+    """
+    items = await service.global_search(q)
+    return DashboardSearchResponse(items=items)

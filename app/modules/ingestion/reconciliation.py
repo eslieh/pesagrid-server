@@ -95,14 +95,28 @@ class ReconciliationService:
 
     def _apply_payment(self, obligation: Obligation, amount: Decimal, transaction: Transaction):
         """Apply the payment amount to the obligation and update its status."""
-        obligation.amount_paid = Decimal(str(obligation.amount_paid)) + amount
+        current_balance = Decimal(str(obligation.balance))
+        overflow = Decimal("0")
+        
+        if amount > current_balance:
+            overflow = amount - current_balance
+            amount_to_apply = current_balance
+        else:
+            amount_to_apply = amount
+
+        obligation.amount_paid = Decimal(str(obligation.amount_paid)) + amount_to_apply
         obligation.balance = Decimal(str(obligation.amount_due)) - Decimal(str(obligation.amount_paid))
 
         if obligation.balance <= 0:
-            obligation.status = ObligationStatus.PAID
-            obligation.balance = Decimal("0")  # clamp — don't go negative
+            obligation.status = ObligationStatus.SETTLED
+            obligation.balance = Decimal("0")
         else:
             obligation.status = ObligationStatus.PARTIAL
+
+        # Handle overflow: add to payer's credit balance
+        if overflow > 0 and obligation.payer:
+            obligation.payer.credit_balance = Decimal(str(obligation.payer.credit_balance or 0)) + overflow
+            logger.info(f"💰 Overflow of {overflow} added to Payer {obligation.payer.id} credit balance")
 
         obligation.updated_at = now_nairobi()
 
@@ -276,7 +290,7 @@ async def reconcile_transaction(transaction_id: str):
 
             event = (
                 EventType.PAYMENT_MATCHED
-                if ob and ob.status == ObligationStatus.PAID
+                if ob and ob.status == ObligationStatus.SETTLED
                 else EventType.PAYMENT_PARTIAL
             )
         else:

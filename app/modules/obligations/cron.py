@@ -89,7 +89,7 @@ def _run_billing_cycle_sync():
                     penalty_rate = Decimal(str(old_ob.meta.get("penalty_rate", "0")))
                     
                     penalty = Decimal("0")
-                    if arrears > 0 and old_ob.status not in (ObligationStatus.PAID, ObligationStatus.CANCELLED):
+                    if arrears > 0 and old_ob.status not in (ObligationStatus.SETTLED, ObligationStatus.VOIDED, ObligationStatus.ROLLED):
                         penalty = arrears * penalty_rate
                     
                     new_amount_due = base_amount + arrears + penalty
@@ -120,9 +120,10 @@ def _run_billing_cycle_sync():
                     db.add(new_ob)
                     db.flush() 
                     
-                    # 3. Mark old obligation as CANCELLED (Rolled Over)
-                    if old_ob.status != ObligationStatus.PAID:
-                        old_ob.status = ObligationStatus.CANCELLED
+                    # 3. Mark old obligation as ROLLED (Rolled Over)
+                    if old_ob.status != ObligationStatus.SETTLED:
+                        old_ob.status = ObligationStatus.ROLLED
+                        old_ob.status_reason = "Automatically rolled to new cycle"
                         old_meta = dict(old_ob.meta or {})
                         old_meta["rolled_over_to"] = str(new_ob.id)
                         old_ob.meta = old_meta
