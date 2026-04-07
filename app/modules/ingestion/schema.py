@@ -46,6 +46,7 @@ class TransactionResponse(TransactionBase):
     status:                TransactionStatus
     matched_obligation_id: Optional[uuid.UUID] = None
     collection_point_id:   Optional[uuid.UUID] = None
+    psp_config_id:         Optional[uuid.UUID] = None
     ingested_at:           datetime
 
     class Config:
@@ -87,6 +88,7 @@ class TransactionEnrichedResponse(TransactionBase):
     is_manual:             bool
     collection_point_id:   Optional[uuid.UUID] = None
     matched_obligation_id: Optional[uuid.UUID] = None
+    psp_config_id:         Optional[uuid.UUID] = None
     ingested_at:           datetime
 
     matched_confidence:    Optional[float]                      = None

@@ -427,11 +427,31 @@ class IngestionService:
         end_date: Optional[datetime] = None,
         amount_min: Optional[float] = None,
         amount_max: Optional[float] = None,
+        phone: Optional[str] = None,
+        psp_ref: Optional[str] = None,
+        psp_config_id: Optional[uuid.UUID] = None,
+        search: Optional[str] = None,
         sort: str = "date_desc",
         skip: int = 0,
         limit: int = 50,
     ) -> Tuple[int, List[Transaction]]:
+        from sqlalchemy import or_
         q = self.db.query(Transaction).filter(Transaction.collection_id == self.collection_id)
+        
+        if search:
+            s = f"%{search.strip()}%"
+            q = q.filter(or_(
+                Transaction.psp_ref.ilike(s),
+                Transaction.phone.ilike(s),
+                Transaction.account_no.ilike(s),
+                Transaction.payer_name.ilike(s)
+            ))
+        if phone:
+            q = q.filter(Transaction.phone == phone.strip())
+        if psp_ref:
+            q = q.filter(Transaction.psp_ref == psp_ref.strip())
+        if psp_config_id:
+            q = q.filter(Transaction.psp_config_id == psp_config_id)
         if account_no:
             q = q.filter(Transaction.account_no == account_no.strip().upper())
         if psp_type:
@@ -471,6 +491,10 @@ class IngestionService:
         end_date: Optional[datetime] = None,
         amount_min: Optional[float] = None,
         amount_max: Optional[float] = None,
+        phone: Optional[str] = None,
+        psp_ref: Optional[str] = None,
+        psp_config_id: Optional[uuid.UUID] = None,
+        search: Optional[str] = None,
         sort: str = "date_desc",
         skip: int = 0,
         limit: int = 50,
@@ -487,6 +511,7 @@ class IngestionService:
           None  CATEGORIZED / UNMATCHED / MANUAL
         """
         from app.modules.obligations.models import Obligation, Payer
+        from sqlalchemy import or_
 
         q = (
             self.db.query(Transaction, Obligation, Payer)
@@ -495,6 +520,20 @@ class IngestionService:
             .filter(Transaction.collection_id == self.collection_id)
         )
 
+        if search:
+            s = f"%{search.strip()}%"
+            q = q.filter(or_(
+                Transaction.psp_ref.ilike(s),
+                Transaction.phone.ilike(s),
+                Transaction.account_no.ilike(s),
+                Transaction.payer_name.ilike(s)
+            ))
+        if phone:
+            q = q.filter(Transaction.phone == phone.strip())
+        if psp_ref:
+            q = q.filter(Transaction.psp_ref == psp_ref.strip())
+        if psp_config_id:
+            q = q.filter(Transaction.psp_config_id == psp_config_id)
         if account_no:
             q = q.filter(Transaction.account_no == account_no.strip().upper())
         if psp_type:
@@ -536,8 +575,10 @@ class IngestionService:
                 "phone":                 txn.phone,
                 "status":                txn.status,
                 "is_manual":             txn.is_manual,
+                "collection_id":         txn.collection_id,
                 "collection_point_id":   txn.collection_point_id,
                 "matched_obligation_id": txn.matched_obligation_id,
+                "psp_config_id":         txn.psp_config_id,
                 "ingested_at":           txn.ingested_at,
                 "matched_confidence":    None,
                 "match_reasons":         None,

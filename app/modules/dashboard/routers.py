@@ -105,6 +105,7 @@ async def get_peak_collection_times(
     Returns collection volume and count broken down by hour of the day.
     Helps identify peak transaction periods.
     """
+    # print(collection_point_id)
     peaks = await service.get_peak_collection_times(
         collection_point_id=collection_point_id,
         start_date=start_date,

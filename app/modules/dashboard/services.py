@@ -272,13 +272,11 @@ class DashboardService:
             )
             .filter(
                 Transaction.collection_id == self.collection_id,
-                Transaction.status.in_([TransactionStatus.MATCHED, TransactionStatus.UNMATCHED, TransactionStatus.MANUAL])
+                Transaction.status.in_([TransactionStatus.MATCHED, TransactionStatus.UNMATCHED, TransactionStatus.MANUAL, TransactionStatus.CATEGORIZED])
             )
         )
-
         if collection_point_id:
             query = query.filter(Transaction.collection_point_id == collection_point_id)
-        
         if start_date:
             query = query.filter(Transaction.ingested_at >= start_date)
         if end_date:
@@ -305,7 +303,6 @@ class DashboardService:
                 await cache.client.setex(cache_key, 300, json.dumps(result))
             except Exception as e:
                 logger.error(f"Cache write error: {e}")
-
         return result
 
     async def get_collection_point_metrics(
