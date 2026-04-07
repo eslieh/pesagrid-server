@@ -150,6 +150,10 @@ class CollectionPointRead(CollectionPointBase):
     class Config:
         from_attributes = True
 
+class CollectionPointListResponse(BaseModel):
+    total: int
+    items: List[CollectionPointRead]
+
 # ─── CollectionPointPSP Schemas ───────────────────────────────────────────────
 
 class CollectionPointPSPCreate(BaseModel):

@@ -10,7 +10,7 @@ import logging
 
 from app.modules.accounts.models import PSPConfig, PSPType
 from app.modules.ingestion.models import (
-    Transaction, TransactionStatus, CollectionPoint, CollectionPointPSP
+    Transaction, TransactionStatus, CollectionPoint, CollectionPointPSP, CollectionPointType
 )
 from app.modules.ingestion.normalizers.mpesa import NormalizedPayment
 from app.modules.ingestion.schema import (
@@ -105,6 +105,9 @@ class CollectionPointService:
             raise HTTPException(status_code=404, detail="Collection point not found")
         return cp
 
+    def get_collection_point(self, cp_id: uuid.UUID) -> CollectionPoint:
+        return self._get_or_404(cp_id)
+
     def create_collection_point(self, data: CollectionPointCreate) -> CollectionPoint:
         account_no = data.account_no.strip().upper()
 
@@ -148,13 +151,34 @@ class CollectionPointService:
                 detail=f"Account number {account_no} already assigned to another collection point"
             )
 
-    def list_collection_points(self) -> List[CollectionPoint]:
-        return (
-            self.db.query(CollectionPoint)
-            .filter(CollectionPoint.collection_id == self.collection_id)
-            .order_by(CollectionPoint.created_at.desc())
-            .all()
-        )
+    def list_collection_points(
+        self,
+        search: Optional[str] = None,
+        cp_type: Optional[CollectionPointType] = None,
+        is_active: Optional[bool] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> Tuple[int, List[CollectionPoint]]:
+        from sqlalchemy import or_
+        q = self.db.query(CollectionPoint).filter(CollectionPoint.collection_id == self.collection_id)
+        
+        if search:
+            search_str = f"%{search}%"
+            q = q.filter(
+                or_(
+                    CollectionPoint.name.ilike(search_str),
+                    CollectionPoint.account_no.ilike(search_str),
+                    CollectionPoint.description.ilike(search_str)
+                )
+            )
+        if cp_type:
+            q = q.filter(CollectionPoint.cp_type == cp_type)
+        if is_active is not None:
+            q = q.filter(CollectionPoint.is_active == is_active)
+            
+        total = q.count()
+        items = q.order_by(CollectionPoint.created_at.desc()).offset(skip).limit(limit).all()
+        return total, items
 
     def get_collection_point_totals(self, cp_id: uuid.UUID):
         """Aggregate total volume collected for this point."""

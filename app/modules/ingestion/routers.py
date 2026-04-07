@@ -7,13 +7,14 @@ import logging
 
 from app.core.dependancies import get_current_verified_user, get_db, verify_mfa
 from app.modules.auth.models import User
-from app.modules.ingestion.models import TransactionStatus
+from app.modules.ingestion.models import TransactionStatus, CollectionPointType
 from app.modules.ingestion.schema import (
     TransactionResponse, TransactionListResponse, ManualPaymentCreate,
     MpesaC2BCallback, MpesaSTKCallback,
     CollectionPointCreate, CollectionPointUpdate, CollectionPointRead,
     CollectionPointPSPCreate, CollectionPointPSPRead,
     TransactionEnrichedListResponse,
+    CollectionPointListResponse,
 )
 from app.modules.ingestion.services import IngestionService, CollectionPointService
 from app.rabbitmq import BasePublisher, EventType, Priority
@@ -229,13 +230,41 @@ def create_collection_point(
 
 @collection_points_router.get(
     "/",
-    response_model=list[CollectionPointRead],
+    response_model=CollectionPointListResponse,
     summary="List collection points",
 )
 def list_collection_points(
+    search: Optional[str] = Query(None, description="Search by name, account_no, or description"),
+    cp_type: Optional[CollectionPointType] = Query(None, description="Filter by instrument type"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     service: CollectionPointService = Depends(get_collection_point_service),
 ):
-    return service.list_collection_points()
+    """
+    List all collection points for the business.
+    Supports advanced filtering by type and search strings.
+    """
+    total, items = service.list_collection_points(
+        search=search,
+        cp_type=cp_type,
+        is_active=is_active,
+        skip=skip,
+        limit=limit,
+    )
+    return CollectionPointListResponse(total=total, items=items)
+
+
+@collection_points_router.get(
+    "/{cp_id}",
+    response_model=CollectionPointRead,
+    summary="Get collection point details",
+)
+def get_collection_point(
+    cp_id: uuid.UUID,
+    service: CollectionPointService = Depends(get_collection_point_service),
+):
+    return service.get_collection_point(cp_id)
 
 
 @collection_points_router.get(
