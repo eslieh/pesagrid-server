@@ -283,3 +283,56 @@ async def handle_config_collection_point_created(envelope: MessageEnvelope) -> N
         logger.error(f"Failed handling config.cp.created: {e}")
     finally:
         db.close()
+async def _notify_business_critical(event_type: str, payload: dict, message_body: str, subject: str) -> None:
+    """Notify the business owner regardless of opt-in settings (for billing/critical alerts)."""
+    from app.core.dependancies import SessionLocal
+    from app.modules.accounts.models import BusinessProfile
+    from app.modules.notifications.services.send_email import send_email
+    from app.modules.notifications.services.send_sms import send_sms
+    from app.modules.notifications.services.renderer import wrap_in_template
+    import uuid
+
+    db = SessionLocal()
+    try:
+        collection_id_raw = payload.get("collection_id")
+        if not collection_id_raw:
+            return
+        collection_id = uuid.UUID(collection_id_raw)
+        profile = db.query(BusinessProfile).filter(BusinessProfile.collection_id == collection_id).first()
+        if not profile:
+            return
+
+        if profile.email:
+            try:
+                from app.modules.notifications.services.dispatcher import _build_from_email
+                from app.core.config import settings
+                email_from = _build_from_email("PesaGrid", settings.RESEND_FROM_EMAIL or "mails.ryfty.net", platform=True)
+                wrapped_body = wrap_in_template(message_body, business_name="PesaGrid")
+                await send_email(profile.email, subject, wrapped_body, from_email=email_from)
+                logger.info(f"📧 Sent billing notification email to business {profile.email}")
+            except Exception as e:
+                logger.error(f"Failed to email business {profile.email}: {e}")
+
+        if profile.phone:
+            try:
+                await send_sms(profile.phone, message_body)
+                logger.info(f"📱 Sent billing notification SMS to business {profile.phone}")
+            except Exception as e:
+                logger.error(f"Failed to SMS business {profile.phone}: {e}")
+
+    except Exception as e:
+        logger.error(f"❌ Critical business notification failed for {event_type}: {e}")
+    finally:
+        db.close()
+
+
+async def handle_billing_topup_success(envelope: MessageEnvelope) -> None:
+    logger.info("✅ billing.wallet.topup_success — notifying business owner")
+    payload = envelope.payload
+    amount = payload.get("amount_credited", 0)
+    balance = payload.get("balance_kes", 0)
+    ref = payload.get("reference", "N/A")
+
+    msg = f"Wallet Top-up Successful: KES {amount:,.2f} credited. Your new balance is KES {balance:,.2f}. Ref: {ref}"
+    subject = "Wallet Top-up Successful"
+    await _notify_business_critical("billing.wallet.topup_success", payload, msg, subject)

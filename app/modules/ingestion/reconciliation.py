@@ -305,6 +305,21 @@ async def reconcile_transaction(transaction_id: str):
         except Exception as e:
             logger.warning(f"Failed to publish {event.value} event: {e}")
 
+        # Billing hook: deduct per-reconciliation fee on a successful match
+        if result_status == "MATCHED":
+            try:
+                await _publisher.publish_event(
+                    event_type=EventType.BILLING_RECON_DONE,
+                    payload={
+                        "collection_id": str(txn.collection_id),
+                        "count": 1,
+                        "meta": {"transaction_id": str(txn.id)},
+                    },
+                    priority=Priority.LOW,
+                )
+            except Exception as e:
+                logger.debug(f"billing recon event publish failed (non-critical): {e}")
+
         return result_status == "MATCHED"
 
     except Exception as e:

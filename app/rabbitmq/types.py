@@ -34,6 +34,14 @@ class EventType(str, Enum):
     CONFIG_PSP_DELETED              = "config.psp.deleted"               # Notify owner of deleted PSP
     CONFIG_COLLECTION_POINT_CREATED = "config.collection_point.created"  # Notify owner of new Collection Point
 
+    # Billing & wallet events
+    BILLING_RECON_DONE         = "billing.reconciliation.done"   # deduct per-reconciliation fee
+    BILLING_NOTIFICATION_SENT  = "billing.notification.sent"     # deduct per-notification fee
+    BILLING_WALLET_LOW         = "billing.wallet.low_balance"    # alert owner wallet is low
+    BILLING_INVOICE_GENERATED  = "billing.invoice.generated"     # monthly invoice ready
+    BILLING_SUBSCRIPTION_TRIAL = "billing.subscription.trial"    # new trial subscription started
+    BILLING_TOPUP_SUCCESS      = "billing.wallet.topup_success"  # notify owner of successful topup
+
 class Priority(int, Enum):
     LOW = 0
     MEDIUM = 1

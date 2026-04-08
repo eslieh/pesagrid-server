@@ -23,6 +23,7 @@ import app.modules.ingestion.models
 import app.modules.obligations.models
 import app.modules.accounts.models
 import app.modules.notifications.models
+import app.modules.billing.models
 
 
 # ─── Handler imports ───────────────────────────────────────────────────────────
@@ -41,11 +42,17 @@ from app.modules.notifications.services.handlers import (
     handle_config_psp_created,
     handle_config_psp_deleted,
     handle_config_collection_point_created,
+    handle_billing_topup_success,
 )
 from app.modules.auth.handlers import (
     handle_auth_welcome,
     handle_auth_password_reset,
     handle_auth_mfa,
+)
+from app.modules.billing.handlers import (
+    handle_billing_recon_done,
+    handle_billing_notification_sent,
+    handle_billing_invoice_created,
 )
 
 logging.basicConfig(
@@ -94,13 +101,20 @@ class PesagridWorker:
         self.consumer.register_handler(EventType.CONFIG_PSP_CREATED,   handle_config_psp_created)
         self.consumer.register_handler(EventType.CONFIG_PSP_DELETED,   handle_config_psp_deleted)
         self.consumer.register_handler(EventType.CONFIG_COLLECTION_POINT_CREATED, handle_config_collection_point_created)
+        self.consumer.register_handler(EventType.BILLING_TOPUP_SUCCESS, handle_billing_topup_success)
+        # Billing usage deductions
+        self.consumer.register_handler(EventType.BILLING_RECON_DONE,        handle_billing_recon_done)
+        self.consumer.register_handler(EventType.BILLING_NOTIFICATION_SENT, handle_billing_notification_sent)
+        self.consumer.register_handler(EventType.OBLIGATION_CREATED,      handle_billing_invoice_created)
 
         self.running = True
         await self.consumer.start()
         
         # Start background recurring billing engine (Scheduled Beat)
         from app.modules.obligations.cron import scheduler, setup_cron_jobs
+        from app.modules.billing.cron import setup_billing_cron_jobs
         setup_cron_jobs()
+        setup_billing_cron_jobs(scheduler)
         scheduler.start()
 
         logger.info("✅ Worker listening & Scheduled Beat active. Waiting for events...")

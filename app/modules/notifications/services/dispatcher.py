@@ -231,6 +231,13 @@ class NotificationDispatcher:
         paybill = self._get_paybill(collection_id)
         context = {**context, "paybill": paybill, "shortcode": paybill}
 
+        # Billing categorization — some events are platform/system related and shouldn't be charged
+        is_free_event = (
+            is_platform_email or 
+            event_type.startswith("billing.wallet.") or 
+            event_type.startswith("config.")
+        )
+
         # ── SMS ───────────────────────────────────────────────────────────────
         if phone:
             body_tpl, _, tmpl_id = self._resolve_template(collection_id, event_type, "sms")
@@ -263,6 +270,9 @@ class NotificationDispatcher:
                               event_type, rendered, None,
                               NotifStatus.FAILED if err else NotifStatus.SENT,
                               tmpl_id, error_msg=err)
+                    if not err and not is_free_event:
+                        import asyncio
+                        asyncio.create_task(self._publish_billing_notification(collection_id, "sms", payer_id))
                 except Exception as e:
                     self._log(collection_id, payer_id, NotifChannel.SMS, phone,
                               event_type, rendered, None, NotifStatus.FAILED,
@@ -296,11 +306,37 @@ class NotificationDispatcher:
                 )
                 try:
                     result = await send_email(email, final_subject, rendered, from_email=email_from)
+                    sent = not result.get("skipped")
                     self._log(collection_id, payer_id, NotifChannel.EMAIL, email,
                               event_type, rendered, final_subject,
-                              NotifStatus.SENT if not result.get("skipped") else NotifStatus.SKIPPED,
+                              NotifStatus.SENT if sent else NotifStatus.SKIPPED,
                               tmpl_id, provider_ref=result.get("id"))
+                    if sent and not is_free_event:
+                        import asyncio
+                        asyncio.create_task(self._publish_billing_notification(collection_id, "email", payer_id))
                 except Exception as e:
                     self._log(collection_id, payer_id, NotifChannel.EMAIL, email,
                               event_type, rendered, final_subject,
                               NotifStatus.FAILED, tmpl_id, error_msg=str(e))
+
+    # ──────────────────────────────────────────────────────────────────────────
+    #  Internal: billing usage metering
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def _publish_billing_notification(self, collection_id, channel: str, payer_id=None) -> None:
+        """Fire-and-forget: publish a billing metering event so the worker can deduct the fee."""
+        try:
+            from app.rabbitmq import BasePublisher, EventType, Priority
+            publisher = BasePublisher("notification-dispatcher")
+            await publisher.publish_event(
+                EventType.BILLING_NOTIFICATION_SENT,
+                {
+                    "collection_id": str(collection_id),
+                    "channel": channel,
+                    "count": 1,
+                    "meta": {"payer_id": str(payer_id) if payer_id else None},
+                },
+                Priority.LOW,
+            )
+        except Exception as exc:
+            logger.debug(f"billing notification event publish failed (non-critical): {exc}")
