@@ -55,6 +55,7 @@ from app.modules.accounts.routers import accounts_router
 from app.modules.ingestion.routers import webhook_router, transactions_router, collection_points_router
 from app.modules.notifications.routers import notifications_router
 from app.modules.dashboard.routers import dashboard_router
+from app.modules.billing.routers import billing_router
 
 app.include_router(auth_router,          prefix="/api/v1/auth",         tags=["Authentication"])
 app.include_router(obligations_router,   prefix="/api/v1/obligations",   tags=["Obligations"])
@@ -64,6 +65,7 @@ app.include_router(webhook_router,       prefix="/api/v1/ingest",        tags=["
 app.include_router(transactions_router,  prefix="/api/v1/transactions",  tags=["Transactions"])
 app.include_router(collection_points_router, prefix="/api/v1/collection-points", tags=["Collection Points"])
 app.include_router(notifications_router, prefix="/api/v1/notifications", tags=["Notifications"])
+app.include_router(billing_router,       prefix="/api/v1/billing",       tags=["Billing"])
 
 @app.get("/health")
 async def health_check():

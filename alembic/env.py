@@ -34,6 +34,7 @@ import app.modules.ingestion.models  # noqa: E402, F401
 import app.modules.notifications.models  # noqa: E402, F401
 import app.modules.obligations.models  # noqa: E402, F401
 import app.modules.reciepts.models  # noqa: E402, F401
+import app.modules.billing.models   # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # Alembic config
@@ -59,6 +60,7 @@ MANAGED_SCHEMAS = [
     "notifications",
     "obligations",
     "reciepts",
+    "billing",
 ]
 
 

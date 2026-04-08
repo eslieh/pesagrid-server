@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     SMS_API_KEY:   str = os.getenv("SMS_API_KEY", "")
     SMS_SENDER_ID: str = os.getenv("SMS_SENDER_ID", "Intacom")
 
+    # Paystack payment gateway
+    PAYSTACK_SECRET_KEY:  str = os.getenv("PAYSTACK_SECRET_KEY", "")
+    PAYSTACK_PUBLIC_KEY:  str = os.getenv("PAYSTACK_PUBLIC_KEY", "")
+    PAYSTACK_BASE_URL:    str = "https://api.paystack.co"
+
     # Cookie Configuration
     COOKIE_DOMAIN: Optional[str] = None  # None for same-origin
     COOKIE_SECURE: bool = True  # Require HTTPS but of for now
