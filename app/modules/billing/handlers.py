@@ -2,8 +2,8 @@
 Billing RabbitMQ handlers — consume usage events and deduct from tenant wallets.
 
 Handlers registered in worker.py:
-  billing.reconciliation.done  → deduct per-recon fee
   billing.notification.sent    → deduct per-notification fee
+  billing.invoice.created      → deduct per-invoice fee
 """
 import logging
 import uuid
@@ -13,37 +13,6 @@ from app.modules.billing.models import WalletTxEvent
 
 logger = logging.getLogger(__name__)
 
-
-async def handle_billing_recon_done(envelope: MessageEnvelope) -> None:
-    """
-    Deduct the per-reconciliation fee from the tenant's wallet.
-
-    Expected payload:
-      {
-        "collection_id": "<uuid>",
-        "count": 1,            # number of reconciliations to charge for
-        "meta": {...}          # optional: transaction_id, obligation_id, etc.
-      }
-    """
-    from app.core.dependancies import SessionLocal
-    from app.modules.billing.services import BillingService
-
-    collection_id_str = envelope.payload.get("collection_id")
-    count = int(envelope.payload.get("count", 1))
-    meta = envelope.payload.get("meta", {})
-
-    if not collection_id_str:
-        logger.error("billing_recon_done: missing collection_id")
-        return
-
-    db = SessionLocal()
-    try:
-        svc = BillingService(db=db, collection_id=uuid.UUID(collection_id_str))
-        svc.deduct_usage(event_type=WalletTxEvent.RECONCILIATION, count=count, meta=meta)
-    except Exception as exc:
-        logger.error(f"billing_recon_done failed for {collection_id_str}: {exc}")
-    finally:
-        db.close()
 
 
 async def handle_billing_notification_sent(envelope: MessageEnvelope) -> None:

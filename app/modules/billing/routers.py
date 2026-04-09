@@ -120,19 +120,41 @@ def get_billing_summary(
     current_user: User = Depends(get_current_verified_user),
 ):
     from decimal import Decimal
-    sub = service.get_my_subscription()
-    wallet = service.get_my_wallet()
-    plan = sub.plan
+    from app.modules.ingestion.models import CollectionPoint
 
-    recon_est = Decimal(str(plan.recon_fee_kes)) * sub.recon_count
+    sub    = service.get_my_subscription()
+    wallet = service.get_my_wallet()
+    plan   = sub.plan
+
+    # Flat monthly subscription fee
+    sub_fee = Decimal(str(plan.monthly_fee_kes))
+
+    # Per-notification usage so far this billing period
     notif_est = Decimal(str(plan.notification_fee_kes)) * sub.notification_count
-    total_est = recon_est + notif_est
+
+    # Per-invoice/obligation usage so far this billing period
+    invoice_est = Decimal(str(plan.invoice_fee_kes)) * sub.invoice_count
+
+    # Collection point rent — count active CPs live
+    cp_count = (
+        db.query(CollectionPoint)
+        .filter(
+            CollectionPoint.collection_id == current_user.id,
+            CollectionPoint.is_active == True,
+        )
+        .count()
+    )
+    cp_rent_est = Decimal(str(plan.collection_point_fee_kes)) * cp_count
+
+    total_est = (sub_fee + notif_est + invoice_est + cp_rent_est).quantize(Decimal("0.01"))
 
     return BillingSummaryResponse(
         subscription=SubscriptionResponse.model_validate(sub),
         wallet=WalletResponse.model_validate(wallet),
-        recon_est=recon_est,
+        subscription_fee=sub_fee,
         notification_est=notif_est,
+        invoice_est=invoice_est,
+        cp_rent_est=cp_rent_est,
         current_month_est=total_est,
     )
 

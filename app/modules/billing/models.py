@@ -39,19 +39,21 @@ class SubscriptionStatus(str, Enum):
 
 class WalletTxType(str, Enum):
     TOPUP        = "topup"         # user loaded money via Paystack
-    DEDUCTION    = "deduction"     # usage fee deducted (recon / SMS / email)
+    DEDUCTION    = "deduction"     # usage fee deducted (SMS / email / invoice)
     REVERSAL     = "reversal"      # refund of an erroneous deduction
     SUBSCRIPTION = "subscription"  # monthly platform fee charged from wallet
 
 
 class WalletTxEvent(str, Enum):
-    RECONCILIATION  = "reconciliation"
-    SMS             = "sms"
-    EMAIL           = "email"
-    INVOICE         = "invoice"
+    # Legacy — kept so existing DB rows with event_type='reconciliation' can still be read.
+    # No longer used for new deductions.
+    RECONCILIATION   = "reconciliation"
+    SMS              = "sms"
+    EMAIL            = "email"
+    INVOICE          = "invoice"
     SUBSCRIPTION_FEE = "subscription_fee"
-    TOPUP           = "topup"
-    REVERSAL        = "reversal"
+    TOPUP            = "topup"
+    REVERSAL         = "reversal"
 
 
 class InvoiceStatus(str, Enum):
@@ -149,7 +151,6 @@ class TenantWallet(Base):
     Prepaid wallet per tenant. Loaded via Paystack top-ups.
 
     Balance is decremented for each:
-      - Reconciliation event  (plan.recon_fee_kes)
       - SMS or email sent     (plan.notification_fee_kes)
       - Monthly platform fee  (plan.monthly_fee_kes)
 
@@ -186,7 +187,6 @@ class WalletTransaction(Base):
 
     One row per event:
       - Top-up via Paystack → type=topup, reference=paystack_ref
-      - Reconciliation fee  → type=deduction, event_type=reconciliation
       - SMS/email fee       → type=deduction, event_type=sms | email
       - Monthly sub fee     → type=subscription
     """
@@ -223,7 +223,6 @@ class PlatformInvoice(Base):
 
     Covers:
       - Monthly subscription/platform fee
-      - Per-reconciliation usage charges
       - Per-notification (SMS + email) usage charges
 
     Payment is via Paystack (pay invoice link) or auto-deducted from wallet.

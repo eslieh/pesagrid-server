@@ -348,10 +348,7 @@ class BillingService:
                 return
 
             plan = sub.plan
-            if event_type == WalletTxEvent.RECONCILIATION:
-                unit_fee = Decimal(str(plan.recon_fee_kes))
-                sub.recon_count += count
-            elif event_type in (WalletTxEvent.SMS, WalletTxEvent.EMAIL):
+            if event_type in (WalletTxEvent.SMS, WalletTxEvent.EMAIL):
                 unit_fee = Decimal(str(plan.notification_fee_kes))
                 sub.notification_count += count
             elif event_type == WalletTxEvent.INVOICE:
@@ -462,7 +459,7 @@ class BillingService:
     def generate_monthly_invoices(cls, db: Session, period_start: datetime, period_end: datetime) -> int:
         """
         Generate PlatformInvoice rows for all ACTIVE subscriptions.
-        Reads recon_count + notification_count from TenantSubscription,
+        Reads notification_count from TenantSubscription,
         charges subscription fee + usage, resets counters.
         Returns number of invoices generated.
         """
@@ -489,9 +486,8 @@ class BillingService:
                 continue
 
             plan = sub.plan
-            sub_fee   = Decimal(str(plan.monthly_fee_kes))
-            recon_fee = Decimal(str(plan.recon_fee_kes)) * sub.recon_count
-            notif_fee = Decimal(str(plan.notification_fee_kes)) * sub.notification_count
+            sub_fee       = Decimal(str(plan.monthly_fee_kes))
+            notif_fee     = Decimal(str(plan.notification_fee_kes)) * sub.notification_count
             inv_usage_fee = Decimal(str(plan.invoice_fee_kes)) * sub.invoice_count
 
             # Count active collection points
@@ -502,7 +498,7 @@ class BillingService:
             ).count()
             cp_rent_fee = Decimal(str(plan.collection_point_fee_kes)) * cp_count
 
-            total = (sub_fee + recon_fee + notif_fee + inv_usage_fee + cp_rent_fee).quantize(Decimal("0.01"))
+            total = (sub_fee + notif_fee + inv_usage_fee + cp_rent_fee).quantize(Decimal("0.01"))
 
             # Generate sequential invoice number: INV-YYYY-MM-XXXXXX
             invoice_seq = db.query(func.count(PlatformInvoice.id)).scalar() + 1
@@ -515,8 +511,6 @@ class BillingService:
                 period_start=period_start,
                 period_end=period_end,
                 subscription_fee_kes=sub_fee,
-                recon_count=sub.recon_count,
-                recon_fee_total_kes=recon_fee,
                 notification_count=sub.notification_count,
                 notification_fee_total_kes=notif_fee,
                 invoice_count=sub.invoice_count,
@@ -549,7 +543,6 @@ class BillingService:
                 db.add(tx)
 
             # Reset monthly usage counters
-            sub.recon_count = 0
             sub.notification_count = 0
             sub.invoice_count = 0
             sub.current_period_start = period_end

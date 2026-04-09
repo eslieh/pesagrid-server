@@ -23,7 +23,6 @@ class PlanResponse(BaseModel):
     slug:                  PlanSlug
     name:                  str
     monthly_fee_kes:       Decimal
-    recon_fee_kes:         Decimal
     notification_fee_kes:  Decimal
     wallet_minimum_kes:    Decimal
     max_branches:          int
@@ -54,7 +53,6 @@ class SubscriptionResponse(BaseModel):
     current_period_end:   Optional[datetime]
     grace_ends_at:        Optional[datetime]
     suspended_at:         Optional[datetime]
-    recon_count:          int
     notification_count:   int
     created_at:           datetime
 
@@ -128,8 +126,6 @@ class InvoiceResponse(BaseModel):
     period_start:               datetime
     period_end:                 datetime
     subscription_fee_kes:       Decimal
-    recon_count:                int
-    recon_fee_total_kes:        Decimal
     notification_count:         int
     notification_fee_total_kes: Decimal
     total_amount_kes:           Decimal
@@ -150,6 +146,8 @@ class InvoiceListResponse(BaseModel):
 class BillingSummaryResponse(BaseModel):
     subscription:      SubscriptionResponse
     wallet:            WalletResponse
-    recon_est:         Decimal   # estimated recon charges this month
-    notification_est:  Decimal   # estimated notification charges this month
-    current_month_est: Decimal   # total estimated usage charges so far
+    subscription_fee:  Decimal   # monthly platform fee for the current plan
+    notification_est:  Decimal   # per-notification charges so far this month
+    invoice_est:       Decimal   # per-invoice/obligation charges so far this month
+    cp_rent_est:       Decimal   # collection point monthly rent (active CPs × fee)
+    current_month_est: Decimal   # total estimated charges so far this month

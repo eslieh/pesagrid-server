@@ -50,7 +50,6 @@ from app.modules.auth.handlers import (
     handle_auth_mfa,
 )
 from app.modules.billing.handlers import (
-    handle_billing_recon_done,
     handle_billing_notification_sent,
     handle_billing_invoice_created,
 )
@@ -103,7 +102,6 @@ class PesagridWorker:
         self.consumer.register_handler(EventType.CONFIG_COLLECTION_POINT_CREATED, handle_config_collection_point_created)
         self.consumer.register_handler(EventType.BILLING_TOPUP_SUCCESS, handle_billing_topup_success)
         # Billing usage deductions
-        self.consumer.register_handler(EventType.BILLING_RECON_DONE,        handle_billing_recon_done)
         self.consumer.register_handler(EventType.BILLING_NOTIFICATION_SENT, handle_billing_notification_sent)
         self.consumer.register_handler(EventType.OBLIGATION_CREATED,      handle_billing_invoice_created)
 
