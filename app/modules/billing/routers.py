@@ -181,14 +181,30 @@ def get_wallet(service: BillingService = Depends(get_service)):
 def initiate_topup(
     data: TopupRequest,
     service: BillingService = Depends(get_service),
+    current_user: User = Depends(get_current_verified_user),
+    db: Session = Depends(get_db),
 ):
     """
-    Creates a Paystack payment session.
+    Creates a Paystack payment session using the business account email.
     Returns `payment_url` — redirect the user there to complete payment.
     """
+    from app.modules.accounts.models import BusinessProfile
+
+    profile = (
+        db.query(BusinessProfile)
+        .filter(BusinessProfile.collection_id == current_user.id)
+        .first()
+    )
+    # Prefer business profile email → fall back to auth user email
+    email = (profile.email if profile and profile.email else None) or current_user.email
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No email address found on your business account. Please update your business profile first.",
+        )
     return service.initiate_topup(
         amount_kes=data.amount_kes,
-        email=data.email,
+        email=email,
         callback_url=data.callback_url,
     )
 

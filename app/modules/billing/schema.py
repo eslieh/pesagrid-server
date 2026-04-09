@@ -73,7 +73,6 @@ class WalletResponse(BaseModel):
 
 class TopupRequest(BaseModel):
     amount_kes: Decimal = Field(..., gt=0, description="Amount to top up in KES (minimum 100)")
-    email:      str     = Field(..., description="Email address for Paystack checkout")
     callback_url: Optional[str] = Field(None, description="URL Paystack redirects to after payment")
 
 
