@@ -178,7 +178,7 @@ def get_wallet(service: BillingService = Depends(get_service)):
     response_model=TopupInitResponse,
     summary="Initiate a wallet top-up via Paystack",
 )
-def initiate_topup(
+async def initiate_topup(
     data: TopupRequest,
     service: BillingService = Depends(get_service),
     current_user: User = Depends(get_current_verified_user),
@@ -202,7 +202,7 @@ def initiate_topup(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No email address found on your business account. Please update your business profile first.",
         )
-    return service.initiate_topup(
+    return await service.initiate_topup(
         amount_kes=data.amount_kes,
         email=email,
         callback_url=data.callback_url,
@@ -214,7 +214,7 @@ def initiate_topup(
     response_model=TopupVerifyResponse,
     summary="Verify and credit a Paystack top-up",
 )
-def verify_topup(
+async def verify_topup(
     data: TopupVerifyRequest,
     service: BillingService = Depends(get_service),
 ):
@@ -222,7 +222,7 @@ def verify_topup(
     Call after Paystack redirects back. Pass the `reference` from the URL.
     Idempotent — safe to call multiple times.
     """
-    return service.verify_topup(data.reference)
+    return await service.verify_topup(data.reference)
 
 
 @billing_router.get(
@@ -317,7 +317,7 @@ async def paystack_webhook(
             if collection_id_str and ref:
                 try:
                     svc = BillingService(db=db, collection_id=uuid.UUID(collection_id_str))
-                    svc.verify_topup(ref)
+                    await svc.verify_topup(ref)
                 except Exception as exc:
                     logger.error(f"Webhook topup failed for ref={ref}: {exc}")
 
