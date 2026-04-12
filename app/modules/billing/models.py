@@ -54,6 +54,7 @@ class WalletTxEvent(str, Enum):
     SUBSCRIPTION_FEE = "subscription_fee"
     TOPUP            = "topup"
     REVERSAL         = "reversal"
+    WELCOME_CREDIT   = "welcome_credit"
 
 
 class InvoiceStatus(str, Enum):

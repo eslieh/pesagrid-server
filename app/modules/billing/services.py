@@ -98,6 +98,11 @@ class BillingService:
             balance_kes=Decimal("0.00"),
         )
         self.db.add(wallet)
+        self.db.flush()
+
+        # Load welcome credit for Starter plan
+        self._check_and_grant_welcome_credit(wallet, starter)
+
         self.db.commit()
         self.db.refresh(sub)
         self.db.refresh(wallet)
@@ -136,6 +141,12 @@ class BillingService:
                 subscription_id=sub.id,
             )
             self.db.add(wallet)
+            self.db.flush()
+        
+        # Ensure they get the welcome credit if moving to Starter
+        wallet = self._get_wallet(sub)
+        if wallet:
+            self._check_and_grant_welcome_credit(wallet, plan)
 
         self.db.commit()
         self.db.refresh(sub)
@@ -628,6 +639,45 @@ class BillingService:
             .filter(TenantWallet.subscription_id == sub.id)
             .first()
         )
+
+    def _check_and_grant_welcome_credit(self, wallet: TenantWallet, plan: SubscriptionPlan) -> None:
+        """
+        Grant a one-time 'Welcome Credit' equal to the minimum wallet balance
+        if the tenant just subscribed to the Starter plan for the first time.
+        """
+        if plan.slug != PlanSlug.STARTER:
+            return
+
+        # Check if already granted
+        already_granted = (
+            self.db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.wallet_id == wallet.id,
+                WalletTransaction.event_type == WalletTxEvent.WELCOME_CREDIT
+            )
+            .first()
+        )
+        if already_granted:
+            return
+
+        credit_amount = plan.wallet_minimum_kes
+        if credit_amount <= 0:
+            return
+
+        new_balance = wallet.balance_kes + credit_amount
+        wallet.balance_kes = new_balance
+
+        tx = WalletTransaction(
+            wallet_id=wallet.id,
+            collection_id=self.collection_id,
+            tx_type=WalletTxType.TOPUP,
+            event_type=WalletTxEvent.WELCOME_CREDIT,
+            amount_kes=credit_amount,
+            balance_after=new_balance,
+            description="Welcome Credit (Starter Plan) — your first month is on us!",
+        )
+        self.db.add(tx)
+        logger.info(f"🎁 Granted welcome credit of {credit_amount} to tenant {self.collection_id}")
 
     # ──────────────────────────────────────────────────────────────────────────
     #  Paystack HTTP helpers
