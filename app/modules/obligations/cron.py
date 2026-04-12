@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -294,13 +295,41 @@ async def run_reminders_cycle():
             priority=Priority.MEDIUM,
         )
 
+def _refresh_ledger_summary_sync():
+    """
+    Refresh the obligations.ledger_summary materialized view CONCURRENTLY.
+    Called every 5 minutes by the cron scheduler so the tracker board never
+    reflects data that is more than 5 minutes stale.
+    CONCURRENT refresh means read queries are never blocked.
+    """
+    db: Session = SessionLocal()
+    try:
+        db.execute(text(
+            "REFRESH MATERIALIZED VIEW CONCURRENTLY obligations.ledger_summary"
+        ))
+        db.commit()
+        logger.info("🔄 [cron] Materialized view obligations.ledger_summary refreshed")
+    except Exception as e:
+        logger.warning(f"[cron] Ledger summary refresh failed: {e}")
+    finally:
+        db.close()
+
+
+async def refresh_ledger_summary_view():
+    """Async wrapper so APScheduler can call the sync DB work off-thread."""
+    await asyncio.to_thread(_refresh_ledger_summary_sync)
+
+
 def setup_cron_jobs():
     """Configure APScheduler jobs."""
     # Run billing cycle every 5 hours (as requested by user in previous conversation)
     # The user said standardizing to 5 hours in conversation 7cd542dd
     scheduler.add_job(run_billing_cycle, 'interval', hours=5, id='billing_cycle')
-    
+
     # Run reminders once a day at 8 AM
     scheduler.add_job(run_reminders_cycle, 'cron', hour=8, minute=0, id='reminders_cycle')
-    
-    logger.info("⏰ Cron jobs scheduled: Billing (5h), Reminders (Daily 08:00)")
+
+    # Refresh the ledger_summary materialized view every 5 minutes
+    scheduler.add_job(refresh_ledger_summary_view, 'interval', minutes=5, id='ledger_summary_refresh')
+
+    logger.info("⏰ Cron jobs scheduled: Billing (5h), Reminders (Daily 08:00), Ledger Refresh (5min)")

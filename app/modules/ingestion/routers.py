@@ -15,6 +15,7 @@ from app.modules.ingestion.schema import (
     CollectionPointPSPCreate, CollectionPointPSPRead,
     TransactionEnrichedListResponse,
     CollectionPointListResponse,
+    TransactionMatchRequest,
 )
 from app.modules.ingestion.services import IngestionService, CollectionPointService
 from app.rabbitmq import BasePublisher, EventType, Priority
@@ -202,6 +203,35 @@ def get_transaction(
     service: IngestionService = Depends(get_authed_service),
 ):
     return service.get_transaction(transaction_id)
+
+
+@transactions_router.post(
+    "/{transaction_id}/match",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Manually match or re-assign a transaction",
+)
+async def match_transaction(
+    transaction_id: uuid.UUID,
+    data: TransactionMatchRequest,
+    current_user: User = Depends(get_current_verified_user),
+):
+    """
+    Asynchronously match a transaction to an obligation or collection point.
+    Returns 202 Accepted immediately.
+    """
+    publisher = BasePublisher("ingestion-service")
+    await publisher.publish_event(
+        event_type=EventType.PAYMENT_MANUAL_MATCH,
+        payload={
+            "transaction_id":   str(transaction_id),
+            "obligation_id":    str(data.obligation_id) if data.obligation_id else None,
+            "collection_point_id": str(data.collection_point_id) if data.collection_point_id else None,
+            "requested_by":     str(current_user.id),
+        },
+        priority=Priority.HIGH,
+    )
+    return {"status": "Accepted", "message": "Transaction matching triggered"}
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════

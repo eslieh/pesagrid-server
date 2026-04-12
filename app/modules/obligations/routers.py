@@ -19,7 +19,9 @@ from app.modules.obligations.schema import (
     NotificationTemplateCreate, NotificationTemplateUpdate,
     NotificationTemplateResponse, NotificationTemplateListResponse,
     RecurrenceType,
-    GlobalLedgerResponse, PayerLedgerResponse
+    GlobalLedgerResponse, PayerLedgerResponse,
+    # Tracker
+    TrackerSummaryResponse, GroupSummaryResponse, UpcomingPaymentsResponse,
 )
 from datetime import datetime
 from app.modules.obligations.services import ObligationService
@@ -83,6 +85,25 @@ async def list_groups(
 ):
     _, items = await service.list_groups(skip=skip, limit=limit)
     return items
+
+
+@obligations_router.get(
+    "/groups/{group_id}/summary",
+    response_model=GroupSummaryResponse,
+    summary="Group obligation roll-up drill-down",
+)
+async def get_group_summary(
+    group_id: uuid.UUID,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Single-query roll-up for a PayerGroup: total due, paid, outstanding balance,
+    and per-payer status rows. Cached for 60 seconds.
+
+    Use this to power a **group detail card** showing which members have paid
+    and which haven't, without loading individual obligations.
+    """
+    return await service.get_group_summary(group_id)
 
 
 @obligations_router.get(
@@ -416,26 +437,66 @@ async def list_obligations(
 
 @obligations_router.get(
     "/ledger",
-    response_model=GlobalLedgerResponse,
-    summary="Global filtered ledger",
+    response_model=TrackerSummaryResponse,
+    summary="Obligation tracker board (paginated, materialized-view backed)",
 )
 async def get_global_ledger(
-    status: Optional[ObligationStatus] = Query(None),
-    is_recurring: Optional[bool] = Query(None),
-    overdue_only: bool = Query(False),
-    this_month: bool = Query(False),
+    page:          int                 = Query(1, ge=1, description="Page number"),
+    page_size:     int                 = Query(25, ge=5, le=100, description="Rows per page"),
+    group_id:      Optional[uuid.UUID] = Query(None, description="Drill into a specific group"),
+    status_filter: Optional[str]       = Query(None, enum=["overdue", "pending", "settled", "clear"], description="Filter payers by their overall payment status"),
+    search:        Optional[str]       = Query(None, description="Search by payer name (case-insensitive)"),
     service: ObligationService = Depends(get_service),
 ):
     """
-    Powerful dashboard view: Grouped by Payer with filters
-    (All, Overdue, Pending, Paid this Month, Recurring).
+    High-performance obligation tracker board.
+
+    Backed by a PostgreSQL materialized view (obligations.ledger_summary)
+    so totals are pre-computed server-side — no Python-level aggregation.
+    Results are cached in Redis for 30 seconds per tenant.
+
+    **Filter tabs the client can render:**
+    - No filter → all payers
+    - `status=overdue`  → payers with at least one overdue obligation
+    - `status=pending`  → payers with pending obligations (no overdue)
+    - `status=settled`  → payers whose open obligations are all settled
+    - `status=clear`    → payers with zero outstanding balance
+
+    **Group drill-down:** pass `group_id` to scope the board to one group.
+    For a full group roll-up (total payers / due / paid) use `GET /groups/{id}/summary`.
     """
     return await service.get_global_ledger(
-        status_filter=status,
-        is_recurring=is_recurring,
-        overdue_only=overdue_only,
-        this_month=this_month
+        page=page,
+        page_size=page_size,
+        group_id=group_id,
+        status_filter=status_filter,
+        search=search,
     )
+
+
+@obligations_router.get(
+    "/ledger/upcoming",
+    response_model=UpcomingPaymentsResponse,
+    summary="Upcoming payments calendar (next N days)",
+)
+async def get_upcoming_payments(
+    days:     int                  = Query(30, ge=1, le=90, description="Lookahead window in days"),
+    group_id: Optional[uuid.UUID]  = Query(None, description="Scope to a specific group"),
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Date-bucketed view of all open obligations due in the next N days.
+
+    Returns one entry per calendar date, each containing:
+    - `total_due`    — sum of outstanding balances for that day
+    - `total_count`  — number of obligations
+    - `unpaid_count` — how many are still unpaid
+    - `obligations`  — full obligation list for that day (with payer info)
+
+    Use this to build a **payment calendar / timeline** in the UI.
+    Results are cached for 60 seconds.
+    """
+    return await service.get_upcoming_payments(window_days=days, group_id=group_id)
 
 
 @obligations_router.get(

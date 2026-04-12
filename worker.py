@@ -30,6 +30,7 @@ import app.modules.billing.models
 from app.modules.ingestion.handlers import (
     handle_webhook_mpesa,
     handle_payment_received,
+    handle_transaction_match,
 )
 from app.modules.notifications.services.handlers import (
     handle_payment_matched,
@@ -91,6 +92,7 @@ class PesagridWorker:
         self.consumer.register_handler(EventType.PAYMENT_PARTIAL,      handle_payment_partial)
         self.consumer.register_handler(EventType.PAYMENT_UNMATCHED,    handle_payment_unmatched)
         self.consumer.register_handler(EventType.PAYMENT_CATEGORIZED,  handle_payment_categorized)
+        self.consumer.register_handler(EventType.PAYMENT_MANUAL_MATCH, handle_transaction_match)
         self.consumer.register_handler(EventType.OBLIGATION_CREATED,   handle_obligation_created)
         self.consumer.register_handler(EventType.OBLIGATION_DUE,       handle_obligation_due)
         self.consumer.register_handler(EventType.OBLIGATION_CANCELLED, handle_obligation_cancelled)

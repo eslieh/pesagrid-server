@@ -13,6 +13,7 @@ Matching logic (in priority order):
 """
 import logging
 import uuid
+import asyncio
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Tuple
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
 from app.core.dependancies import SessionLocal
-from app.modules.ingestion.models import Transaction, TransactionStatus, CollectionPoint
+from app.modules.ingestion.models import Transaction, TransactionStatus, CollectionPoint, TransactionAllocation
 from app.modules.obligations.models import Obligation, ObligationStatus, Payer
 from app.core.timezone import now_nairobi
 
@@ -125,6 +126,16 @@ class ReconciliationService:
         transaction.matched_at = now_nairobi()
         transaction.status = TransactionStatus.MATCHED
 
+        # Record allocation for perfect rollback later
+        allocation = TransactionAllocation(
+            transaction_id=transaction.id,
+            obligation_id=obligation.id,
+            payer_id=obligation.payer_id,
+            amount_applied=amount_to_apply,
+            amount_credited=overflow
+        )
+        self.db.add(allocation)
+
         self.db.commit()
 
         logger.info(
@@ -146,7 +157,9 @@ class ReconciliationService:
             return "ALREADY_PROCESSED"
 
         if txn.status in (TransactionStatus.MATCHED, TransactionStatus.CATEGORIZED, TransactionStatus.DUPLICATE):
-            logger.info(f"Reconcile: skipping already-{txn.status.value} transaction {transaction_id}")
+            logger.info(f"Reconcile: transaction {transaction_id} already in state {txn.status.value}")
+            if txn.status == TransactionStatus.MATCHED: return "ALREADY_MATCHED"
+            if txn.status == TransactionStatus.CATEGORIZED: return "ALREADY_CATEGORIZED"
             return "ALREADY_PROCESSED"
 
 
@@ -190,9 +203,110 @@ class ReconciliationService:
         self.db.commit()
         return "UNMATCHED"
 
+    def rollback_payment(self, transaction_id: uuid.UUID) -> bool:
+        """
+        Reverse the effects of a matched transaction.
+        Uses TransactionAllocation to perfectly undo amount_paid and credit_balance.
+        """
+        txn = self.db.query(Transaction).filter(Transaction.id == transaction_id).first()
+        if not txn or txn.status not in (TransactionStatus.MATCHED, TransactionStatus.CATEGORIZED):
+            return False
+
+        # If it was CATEGORIZED (CollectionPoint), just clear the link
+        if txn.status == TransactionStatus.CATEGORIZED:
+            txn.collection_point_id = None
+            txn.status = TransactionStatus.UNMATCHED
+            self.db.commit()
+            return True
+
+        # If it was MATCHED, find the allocation
+        allocation = (
+            self.db.query(TransactionAllocation)
+            .filter(TransactionAllocation.transaction_id == txn.id)
+            .first()
+        )
+        if not allocation:
+            logger.warning(f"Rollback: No allocation found for matched txn {txn.id}")
+            # Fallback: if no allocation, we can't safely rollback? 
+            # For now, let's just clear the txn status as a best effort
+            txn.matched_obligation_id = None
+            txn.status = TransactionStatus.UNMATCHED
+            self.db.commit()
+            return True
+
+        # 1. Reverse amount_paid on Obligation
+        if allocation.obligation_id:
+            ob = self.db.query(Obligation).filter(Obligation.id == allocation.obligation_id).first()
+            if ob:
+                ob.amount_paid = Decimal(str(ob.amount_paid)) - Decimal(str(allocation.amount_applied))
+                ob.balance = Decimal(str(ob.amount_due)) - Decimal(str(ob.amount_paid))
+                
+                # Recalculate status
+                if ob.amount_paid <= 0:
+                    ob.status = ObligationStatus.PENDING
+                    ob.amount_paid = 0
+                else:
+                    ob.status = ObligationStatus.PARTIAL
+                
+                logger.info(f"🔄 Rolled back {allocation.amount_applied} from Obligation {ob.id}")
+
+        # 2. Reverse credit_balance on Payer
+        if allocation.payer_id and allocation.amount_credited > 0:
+            payer = self.db.query(Payer).filter(Payer.id == allocation.payer_id).first()
+            if payer:
+                payer.credit_balance = Decimal(str(payer.credit_balance or 0)) - Decimal(str(allocation.amount_credited))
+                logger.info(f"🔄 Rolled back {allocation.amount_credited} overflow credit from Payer {payer.id}")
+
+        # 3. Clean up
+        self.db.delete(allocation)
+        txn.matched_obligation_id = None
+        txn.matched_at = None
+        txn.status = TransactionStatus.UNMATCHED
+        
+        self.db.commit()
+        return True
+
+    def manual_match_transaction(
+        self, 
+        transaction_id: uuid.UUID, 
+        obligation_id: Optional[uuid.UUID] = None, 
+        collection_point_id: Optional[uuid.UUID] = None
+    ) -> str:
+        """
+        Force a transaction to match a specific target.
+        If already matched, it rolls back first.
+        """
+        txn = self.db.query(Transaction).filter(Transaction.id == transaction_id).first()
+        if not txn:
+            raise ValueError("Transaction not found")
+
+        # 1. Rollback if already matched/categorized
+        if txn.status in (TransactionStatus.MATCHED, TransactionStatus.CATEGORIZED):
+            self.rollback_payment(transaction_id)
+
+        # 2. Apply new match
+        if collection_point_id:
+            cp = self.db.query(CollectionPoint).filter(CollectionPoint.id == collection_point_id).first()
+            if not cp:
+                raise ValueError("Collection point not found")
+            txn.collection_point_id = cp.id
+            txn.status = TransactionStatus.CATEGORIZED
+            self.db.commit()
+            return "CATEGORIZED"
+
+        if obligation_id:
+            ob = self.db.query(Obligation).filter(Obligation.id == obligation_id).first()
+            if not ob:
+                raise ValueError("Obligation not found")
+            self._apply_payment(ob, Decimal(str(txn.amount)), txn)
+            return "MATCHED"
+
+        return "UNMATCHED"
 
 
-async def reconcile_transaction(transaction_id: str):
+
+
+async def reconcile_transaction(transaction_id: str, force_notify: bool = False):
     """
     Async wrapper called by the worker and the webhook BackgroundTask.
     Opens its own DB session, runs reconciliation, then publishes the
@@ -206,14 +320,19 @@ async def reconcile_transaction(transaction_id: str):
     db = SessionLocal()
     try:
         service = ReconciliationService(db)
-        # Re-fetch transaction after reconcile to get updated state
-        result_status = service.reconcile(uuid.UUID(transaction_id))
+        result_status = await asyncio.to_thread(service.reconcile, uuid.UUID(transaction_id))
 
+        # 1. Handle already processed transactions
         if result_status == "ALREADY_PROCESSED":
             return True
-        
-        # CATEGORIZED = CollectionPoint (bulk). Only send an acknowledgement
-        # SMS if the business has opted in on that specific collection point.
+
+        if result_status in ("ALREADY_MATCHED", "ALREADY_CATEGORIZED"):
+            if not force_notify:
+                return True
+            # If forcing, we strip the prefix to proceed with notification logic
+            result_status = result_status.replace("ALREADY_", "")
+
+        # 2. Proceed with notifications (Categorized vs Matched)
         if result_status == "CATEGORIZED":
             from app.modules.ingestion.models import Transaction as Txn
             from app.modules.ingestion.models import CollectionPoint as CP

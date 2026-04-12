@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from collections import defaultdict
 from typing import Optional, List, Tuple
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
@@ -536,116 +537,443 @@ class ObligationService:
             "status_description": desc
         }
 
-    async def get_global_ledger(self, 
-        status_filter: Optional[ObligationStatus] = None,
-        is_recurring: Optional[bool] = None,
-        overdue_only: bool = False,
-        this_month: bool = False
+    # ─── Ledger Tracker (materialized-view backed) ────────────────────────────
+
+    async def refresh_ledger_summary(self) -> None:
+        """
+        Refresh the materialized view CONCURRENTLY so reads are never blocked.
+        Stores the timestamp in Redis so we don't refresh more than once per 5 min.
+        """
+        refresh_key = f"ledger_summary:refreshed_at:{self.collection_id}"
+        try:
+            if cache.client:
+                last_refresh = await cache.client.get(refresh_key)
+                if last_refresh:
+                    return  # Still fresh — skip
+        except Exception:
+            pass  # If Redis is down, proceed with the refresh anyway
+
+        try:
+            self.db.execute(text(
+                "REFRESH MATERIALIZED VIEW CONCURRENTLY obligations.ledger_summary"
+            ))
+            self.db.commit()
+            logger.info("🔄 Materialized view obligations.ledger_summary refreshed")
+        except Exception as e:
+            logger.warning(f"Materialized view refresh failed: {e}")
+            return
+
+        try:
+            if cache.client:
+                # Mark as fresh for 5 minutes (300 seconds)
+                await cache.client.setex(refresh_key, 300, "1")
+        except Exception:
+            pass
+
+    async def get_global_ledger(
+        self,
+        page: int = 1,
+        page_size: int = 25,
+        group_id: Optional[uuid.UUID] = None,
+        status_filter: Optional[str] = None,  # "overdue" | "pending" | "settled" | "clear"
+        search: Optional[str] = None,
     ) -> dict:
         """
-        Global dashboard view: Grouped by Payer with filters.
+        High-performance obligation tracker board backed by the
+        obligations.ledger_summary materialized view.
+
+        Replaces the original Python-loop global ledger with pure SQL aggregates.
+        Cached per-tenant per-page for 30 seconds in Redis.
         """
-        q = self.db.query(Obligation).filter(Obligation.collection_id == self.collection_id)
-        
-        # 1. Global counts (unfiltered)
-        # 1. Global counts (Database-level aggregation)
-        status_counts = (
-            self.db.query(Obligation.status, func.count(Obligation.id))
-            .filter(Obligation.collection_id == self.collection_id)
-            .group_by(Obligation.status)
-            .all()
+        cache_key = (
+            f"ledger:tracker:{self.collection_id}:"
+            f"{page}:{page_size}:{group_id}:{status_filter}:{search}"
         )
-        status_map = {s.value: count for s, count in status_counts}
-        
-        recurring_count = (
-            self.db.query(func.count(Obligation.id))
-            .filter(Obligation.collection_id == self.collection_id, Obligation.is_recurring == True)
-            .scalar()
-        )
+        if cache.client:
+            try:
+                cached = await cache.client.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Cache read error (ledger tracker): {e}")
 
+        # Lazily refresh if the view is stale (Redis TTL guards against over-refresh)
+        await self.refresh_ledger_summary()
+
+        offset = (page - 1) * page_size
+        cid = str(self.collection_id)
+
+        # Build WHERE clause fragments
+        where_clauses = ["ls.collection_id = :cid"]
+        params: dict = {"cid": cid, "limit": page_size, "offset": offset}
+
+        if group_id:
+            where_clauses.append("ls.group_id = :group_id")
+            params["group_id"] = str(group_id)
+
+        if status_filter == "overdue":
+            where_clauses.append("ls.overdue_count > 0")
+        elif status_filter == "pending":
+            where_clauses.append("ls.pending_count > 0 AND ls.overdue_count = 0")
+        elif status_filter == "settled":
+            where_clauses.append("ls.settled_count > 0 AND ls.overdue_count = 0 AND ls.pending_count = 0")
+        elif status_filter == "clear":
+            where_clauses.append("ls.overdue_count = 0 AND ls.pending_count = 0")
+
+        if search:
+            where_clauses.append("ls.payer_name ILIKE :search")
+            params["search"] = f"%{search}%"
+
+        where_sql = " AND ".join(where_clauses)
+
+        sql = text(f"""
+            SELECT
+                ls.payer_id,
+                ls.payer_name,
+                ls.payer_phone,
+                ls.payer_account_no,
+                ls.payer_is_active,
+                ls.group_id,
+                pg.name             AS group_name,
+                ls.total_obligations,
+                ls.total_due,
+                ls.total_paid,
+                ls.total_balance,
+                ls.overdue_count,
+                ls.pending_count,
+                ls.settled_count,
+                ls.next_due_date,
+                ls.last_activity,
+                COUNT(*) OVER ()    AS row_count,
+                SUM(ls.total_balance) OVER () AS grand_balance,
+                SUM(ls.total_due)    OVER () AS grand_due,
+                SUM(ls.total_paid)   OVER () AS grand_paid,
+                COUNT(*) FILTER (WHERE ls.overdue_count  > 0) OVER () AS overdue_payers,
+                COUNT(*) FILTER (WHERE ls.pending_count  > 0 AND ls.overdue_count  = 0) OVER () AS pending_payers,
+                COUNT(*) FILTER (WHERE ls.settled_count  > 0 AND ls.overdue_count  = 0 AND ls.pending_count = 0) OVER () AS settled_payers,
+                COUNT(*) FILTER (WHERE ls.overdue_count  = 0 AND ls.pending_count  = 0) OVER () AS clear_payers
+            FROM obligations.ledger_summary ls
+            LEFT JOIN obligations.payer_groups pg ON pg.id = ls.group_id
+            WHERE {where_sql}
+            ORDER BY ls.overdue_count DESC, ls.total_balance DESC
+            LIMIT :limit OFFSET :offset
+        """)
+
+        rows = self.db.execute(sql, params).fetchall()
+
+        if not rows:
+            empty = {
+                "total_payers": 0,
+                "total_balance": 0.0,
+                "total_due": 0.0,
+                "total_paid": 0.0,
+                "counts": {"total": 0, "overdue": 0, "pending": 0, "settled": 0, "clear": 0},
+                "page": page,
+                "page_size": page_size,
+                "items": [],
+            }
+            return empty
+
+        first = rows[0]
+        total_payers = first.row_count
+        grand_balance = float(first.grand_balance or 0)
+        grand_due = float(first.grand_due or 0)
+        grand_paid = float(first.grand_paid or 0)
         counts = {
-            "all": sum(status_map.values()),
-            "overdue": status_map.get(ObligationStatus.OVERDUE, 0),
-            "pending": status_map.get(ObligationStatus.PENDING, 0) + status_map.get(ObligationStatus.PARTIAL, 0),
-            "settled": status_map.get(ObligationStatus.SETTLED, 0),
-            "recurring": recurring_count,
+            "total":   total_payers,
+            "overdue": first.overdue_payers,
+            "pending": first.pending_payers,
+            "settled": first.settled_payers,
+            "clear":   first.clear_payers,
         }
-
-        # 2. Applying filters
-        if status_filter:
-            q = q.filter(Obligation.status == status_filter)
-        if is_recurring is not None:
-            q = q.filter(Obligation.is_recurring == is_recurring)
-        if overdue_only:
-            q = q.filter(Obligation.status == ObligationStatus.OVERDUE)
-        if this_month:
-            now = now_nairobi()
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            q = q.filter(Obligation.created_at >= start)
-
-        # Add Eager Loading to fix N+1 (Payer and its Group)
-        q = q.options(
-            joinedload(Obligation.payer).joinedload(Payer.group)
-        )
-        
-        obs = q.order_by(Obligation.created_at.desc()).all()
-
-        # 3. Grouping by Payer
-        payer_map = {}
-        for ob in obs:
-            p_id = ob.payer_id
-            if p_id not in payer_map:
-                payer_map[p_id] = {
-                    "payer": ob.payer,
-                    "obligations": [],
-                    "total_amount": 0,
-                    "overdue_count": 0,
-                    "pending_count": 0,
-                    "status": "pending"
-                }
-            
-            # Enrich the obligation
-            rich_ob = ob
-            rich_ob.status_description = self._get_status_desc(ob) # Dynamic attribute
-            
-            payer_map[p_id]["obligations"].append(rich_ob)
-            payer_map[p_id]["total_amount"] += float(ob.balance)
-            if ob.status == ObligationStatus.OVERDUE:
-                payer_map[p_id]["overdue_count"] += 1
-                payer_map[p_id]["status"] = "overdue"
-            elif ob.status in (ObligationStatus.PENDING, ObligationStatus.PARTIAL):
-                payer_map[p_id]["pending_count"] += 1
 
         items = []
-        for p_id, data in payer_map.items():
-            summary = ""
-            if data["overdue_count"] > 0:
-                summary = f"No group · {data['overdue_count']} overdue invoice"
-            elif data["pending_count"] > 0:
-                summary = f"No group · {data['pending_count']} pending invoice"
+        for r in rows:
+            if r.overdue_count > 0:
+                payer_status = "overdue"
+            elif r.pending_count > 0:
+                payer_status = "pending"
+            elif r.settled_count > 0:
+                payer_status = "settled"
             else:
-                summary = "All settled"
-            
-            # If they have a group, use it
-            if data["payer"].group:
-                summary = summary.replace("No group", data["payer"].group.name)
+                payer_status = "clear"
 
             items.append({
-                "payer": data["payer"],
-                "summary_text": summary,
-                "total_amount": data["total_amount"],
-                "status": data["status"],
-                "obligations": data["obligations"]
+                "payer_id":          str(r.payer_id),
+                "payer_name":        r.payer_name,
+                "payer_phone":       r.payer_phone,
+                "payer_account_no":  r.payer_account_no,
+                "payer_is_active":   r.payer_is_active,
+                "group_id":          str(r.group_id) if r.group_id else None,
+                "group_name":        r.group_name,
+                "total_obligations": r.total_obligations,
+                "total_due":         float(r.total_due),
+                "total_paid":        float(r.total_paid),
+                "total_balance":     float(r.total_balance),
+                "overdue_count":     r.overdue_count,
+                "pending_count":     r.pending_count,
+                "settled_count":     r.settled_count,
+                "next_due_date":     r.next_due_date.isoformat() if r.next_due_date else None,
+                "last_activity":     r.last_activity.isoformat() if r.last_activity else None,
+                "payer_status":      payer_status,
             })
 
-        return {
-            "total_payers": len(items),
-            "counts": counts,
-            "items": items
+        result = {
+            "total_payers":  total_payers,
+            "total_balance": grand_balance,
+            "total_due":     grand_due,
+            "total_paid":    grand_paid,
+            "counts":        counts,
+            "page":          page,
+            "page_size":     page_size,
+            "items":         items,
         }
 
+        if cache.client:
+            try:
+                await cache.client.setex(cache_key, 30, json.dumps(result))
+            except Exception as e:
+                logger.warning(f"Cache write error (ledger tracker): {e}")
+
+        return result
+
+    async def get_group_summary(self, group_id: uuid.UUID) -> dict:
+        """
+        Single-query roll-up for one PayerGroup using the materialized view.
+        Returns group metadata + per-payer rows, all from SQL.
+        Cached for 60 seconds.
+        """
+        cache_key = f"ledger:group:{self.collection_id}:{group_id}"
+        if cache.client:
+            try:
+                cached = await cache.client.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Cache read error (group summary): {e}")
+
+        # Validate group belongs to this collection
+        group = self._get_group_or_404(group_id)
+
+        sql = text("""
+            SELECT
+                ls.payer_id,
+                ls.payer_name,
+                ls.payer_phone,
+                ls.payer_account_no,
+                ls.payer_is_active,
+                ls.group_id,
+                ls.total_obligations,
+                ls.total_due,
+                ls.total_paid,
+                ls.total_balance,
+                ls.overdue_count,
+                ls.pending_count,
+                ls.settled_count,
+                ls.next_due_date,
+                ls.last_activity
+            FROM obligations.ledger_summary ls
+            WHERE ls.collection_id = :cid
+              AND ls.group_id = :gid
+            ORDER BY ls.overdue_count DESC, ls.total_balance DESC
+        """)
+
+        rows = self.db.execute(sql, {
+            "cid": str(self.collection_id),
+            "gid": str(group_id),
+        }).fetchall()
+
+        payers = []
+        for r in rows:
+            if r.overdue_count > 0:
+                payer_status = "overdue"
+            elif r.pending_count > 0:
+                payer_status = "pending"
+            elif r.settled_count > 0:
+                payer_status = "settled"
+            else:
+                payer_status = "clear"
+
+            payers.append({
+                "payer_id":          str(r.payer_id),
+                "payer_name":        r.payer_name,
+                "payer_phone":       r.payer_phone,
+                "payer_account_no":  r.payer_account_no,
+                "payer_is_active":   r.payer_is_active,
+                "group_id":          str(r.group_id) if r.group_id else None,
+                "group_name":        group.name,
+                "total_obligations": r.total_obligations,
+                "total_due":         float(r.total_due),
+                "total_paid":        float(r.total_paid),
+                "total_balance":     float(r.total_balance),
+                "overdue_count":     r.overdue_count,
+                "pending_count":     r.pending_count,
+                "settled_count":     r.settled_count,
+                "next_due_date":     r.next_due_date.isoformat() if r.next_due_date else None,
+                "last_activity":     r.last_activity.isoformat() if r.last_activity else None,
+                "payer_status":      payer_status,
+            })
+
+        agg_sql = text("""
+            SELECT
+                COUNT(DISTINCT ls.payer_id)   AS total_payers,
+                COALESCE(SUM(ls.total_due),  0) AS total_due,
+                COALESCE(SUM(ls.total_paid), 0) AS total_paid,
+                COALESCE(SUM(ls.total_balance), 0) AS total_balance,
+                SUM(ls.overdue_count)  AS overdue_count,
+                SUM(ls.pending_count)  AS pending_count,
+                SUM(ls.settled_count)  AS settled_count
+            FROM obligations.ledger_summary ls
+            WHERE ls.collection_id = :cid AND ls.group_id = :gid
+        """)
+        agg = self.db.execute(agg_sql, {
+            "cid": str(self.collection_id),
+            "gid": str(group_id),
+        }).fetchone()
+
+        result = {
+            "group_id":      str(group.id),
+            "group_name":    group.name,
+            "group_type":    group.group_type.value,
+            "description":   group.description,
+            "total_payers":  agg.total_payers if agg else 0,
+            "total_due":     float(agg.total_due) if agg else 0.0,
+            "total_paid":    float(agg.total_paid) if agg else 0.0,
+            "total_balance": float(agg.total_balance) if agg else 0.0,
+            "overdue_count": agg.overdue_count if agg else 0,
+            "pending_count": agg.pending_count if agg else 0,
+            "settled_count": agg.settled_count if agg else 0,
+            "payers":        payers,
+        }
+
+        if cache.client:
+            try:
+                await cache.client.setex(cache_key, 60, json.dumps(result))
+            except Exception as e:
+                logger.warning(f"Cache write error (group summary): {e}")
+
+        return result
+
+    async def get_upcoming_payments(
+        self,
+        window_days: int = 30,
+        group_id: Optional[uuid.UUID] = None,
+    ) -> dict:
+        """
+        Date-bucketed view of the next N days of open obligations.
+        Powered by the existing indexed `due_date` column — no mat-view needed.
+        """
+        cache_key = f"ledger:upcoming:{self.collection_id}:{window_days}:{group_id}"
+        if cache.client:
+            try:
+                cached = await cache.client.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Cache read error (upcoming): {e}")
+
+        now = now_nairobi()
+        window_end = now + timedelta(days=window_days)
+
+        q = (
+            self.db.query(Obligation)
+            .options(joinedload(Obligation.payer))
+            .filter(
+                Obligation.collection_id == self.collection_id,
+                Obligation.status.in_([
+                    ObligationStatus.PENDING,
+                    ObligationStatus.PARTIAL,
+                    ObligationStatus.OVERDUE,
+                ]),
+                Obligation.due_date.isnot(None),
+                Obligation.due_date <= window_end,
+            )
+            .order_by(Obligation.due_date.asc())
+        )
+
+        if group_id:
+            q = q.join(Payer, Payer.id == Obligation.payer_id).filter(Payer.group_id == group_id)
+
+        obs = q.all()
+
+        # Bucket by due_date.date()
+        buckets: dict = defaultdict(list)
+        for ob in obs:
+            day = ob.due_date.date()
+            buckets[day].append(ob)
+
+        entries = []
+        for day in sorted(buckets.keys()):
+            day_obs = buckets[day]
+            paid_count   = sum(1 for o in day_obs if o.status == ObligationStatus.SETTLED)
+            unpaid_count = len(day_obs) - paid_count
+            total_due    = sum(float(o.balance) for o in day_obs)
+
+            obs_out = []
+            for o in day_obs:
+                obs_out.append({
+                    "id":           str(o.id),
+                    "collection_id": str(o.collection_id),
+                    "payer_id":     str(o.payer_id),
+                    "account_no":   o.account_no,
+                    "description":  o.description,
+                    "amount_due":   float(o.amount_due),
+                    "amount_paid":  float(o.amount_paid),
+                    "balance":      float(o.balance),
+                    "currency":     o.currency,
+                    "due_date":     o.due_date.isoformat() if o.due_date else None,
+                    "status":       o.status.value,
+                    "status_reason": o.status_reason,
+                    "is_recurring": o.is_recurring,
+                    "meta":         o.meta,
+                    "created_by":   str(o.created_by),
+                    "created_at":   o.created_at.isoformat(),
+                    "updated_at":   o.updated_at.isoformat(),
+                    "payer":        {
+                        "id":            str(o.payer.id),
+                        "name":          o.payer.name,
+                        "phone":         o.payer.phone,
+                        "account_no":    o.payer.account_no,
+                        "collection_id": str(o.payer.collection_id),
+                        "group_id":      str(o.payer.group_id) if o.payer.group_id else None,
+                        "email":         o.payer.email,
+                        "identifier":    o.payer.identifier,
+                        "notes":         o.payer.notes,
+                        "is_active":     o.payer.is_active,
+                        "credit_balance": float(o.payer.credit_balance),
+                        "meta":          o.payer.meta,
+                        "created_by":    str(o.payer.created_by),
+                        "created_at":    o.payer.created_at.isoformat(),
+                        "updated_at":    o.payer.updated_at.isoformat(),
+                    } if o.payer else None,
+                    "recurring_config": None,
+                })
+
+            entries.append({
+                "due_date":    day.isoformat(),
+                "total_due":   total_due,
+                "total_count": len(day_obs),
+                "paid_count":  paid_count,
+                "unpaid_count": unpaid_count,
+                "obligations": obs_out,
+            })
+
+        result = {
+            "window_days":    window_days,
+            "total_upcoming": len(obs),
+            "entries":        entries,
+        }
+
+        if cache.client:
+            try:
+                await cache.client.setex(cache_key, 60, json.dumps(result))
+            except Exception as e:
+                logger.warning(f"Cache write error (upcoming): {e}")
+
+        return result
+
     def _get_status_desc(self, ob: Obligation) -> str:
-        """Logic for rich description based on status."""
+        """Rich description based on obligation status (used in payer ledger)."""
         if ob.status == ObligationStatus.OVERDUE:
             due_fmt = ob.due_date.strftime("%b %d") if ob.due_date else "unknown"
             return f"Was due {due_fmt} — no payment received yet"
@@ -656,7 +984,7 @@ class ObligationService:
             return f"KES {ob.amount_paid:,.2f} received — KES {ob.balance:,.2f} still outstanding"
         elif ob.status == ObligationStatus.SETTLED:
             return f"Paid in full {ob.updated_at.strftime('%b %d')}"
-        
+
         return f"Due {ob.due_date.strftime('%b %d')}" if ob.due_date else "Pending"
 
     async def _publish_obligation_created(self, obligation: Obligation, payer: Payer):

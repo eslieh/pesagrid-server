@@ -39,6 +39,11 @@ class ManualPaymentCreate(TransactionBase):
     psp_type:   str = Field("manual", example="bank_transfer")
     note:       Optional[str] = None
 
+class TransactionMatchRequest(BaseModel):
+    """Payload to manually match or re-assign a transaction."""
+    obligation_id:       Optional[uuid.UUID] = None
+    collection_point_id: Optional[uuid.UUID] = None
+
 class TransactionResponse(TransactionBase):
     """Full transaction record including internal metadata."""
     id:                    uuid.UUID

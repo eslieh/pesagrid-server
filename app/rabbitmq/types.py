@@ -19,6 +19,7 @@ class EventType(str, Enum):
     PAYMENT_PARTIAL   = "payment.partial"     # obligation → PARTIAL
     PAYMENT_UNMATCHED    = "payment.unmatched"     # no obligation found
     PAYMENT_CATEGORIZED  = "payment.categorized"   # collection point payment — opt-in acknowledgement
+    PAYMENT_MANUAL_MATCH = "payment.manual.match"  # manually force matching an unmatched transaction
     # Obligations lifecycle
     OBLIGATION_CREATED = "obligation.created"
     OBLIGATION_DUE     = "obligation.due"     # scheduled reminder (future)

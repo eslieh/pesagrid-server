@@ -46,9 +46,10 @@ async def handle_webhook_mpesa(envelope: MessageEnvelope) -> None:
     finally:
         db.close()
 
-    # ── Reconcile ──────────────────────────────────────────────────────────────
-    if is_new:
-        await reconcile_transaction(str(txn.id))
+    # Ingestion already publishes a payment.received event, which triggers 
+    # reconciliation via handle_payment_received. Removing the direct call 
+    # here to prevent double processing.
+    pass
 
 
 async def handle_payment_received(envelope: MessageEnvelope) -> None:
@@ -61,3 +62,38 @@ async def handle_payment_received(envelope: MessageEnvelope) -> None:
         return
     logger.info(f"💳 Reconciling transaction {transaction_id}")
     await reconcile_transaction(transaction_id)
+
+
+async def handle_transaction_match(envelope: MessageEnvelope) -> None:
+    """Manually match or re-assign a transaction to an obligation or collection point."""
+    from app.core.dependancies import SessionLocal
+    from app.modules.ingestion.reconciliation import ReconciliationService, reconcile_transaction
+
+    payload = envelope.payload
+    transaction_id = payload.get("transaction_id")
+    obligation_id = payload.get("obligation_id")
+    collection_point_id = payload.get("collection_point_id")
+
+    if not transaction_id:
+        logger.error("payment.manual.match missing transaction_id")
+        return
+
+    db = SessionLocal()
+    try:
+        service = ReconciliationService(db=db)
+        service.manual_match_transaction(
+            transaction_id=uuid.UUID(transaction_id),
+            obligation_id=uuid.UUID(obligation_id) if obligation_id else None,
+            collection_point_id=uuid.UUID(collection_point_id) if collection_point_id else None
+        )
+        logger.info(f"🎯 Transaction {transaction_id} manually matched (ob={obligation_id}, cp={collection_point_id})")
+
+        # After matching, we trigger the normal notification/billing cycle
+        await reconcile_transaction(transaction_id, force_notify=True)
+
+    except Exception as e:
+        logger.error(f"Manual match failed for {transaction_id}: {e}")
+        db.rollback()
+    finally:
+        db.close()
+

@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.dependancies import get_current_verified_user, get_db
@@ -63,3 +63,65 @@ def list_notification_logs(
     total = q.count()
     items = q.order_by(NotificationLog.created_at.desc()).offset(skip).limit(limit).all()
     return NotificationLogListResponse(total=total, items=items)
+
+
+class NotificationSettings(BaseModel):
+    payment_notifications_enabled: bool = False
+    payment_notification_channels: List[str] = ["email"]
+
+
+@notifications_router.get(
+    "/settings",
+    response_model=NotificationSettings,
+    summary="Get business notification settings",
+)
+def get_notification_settings(
+    current_user: User = Depends(get_current_verified_user),
+    db: Session = Depends(get_db),
+):
+    from app.modules.accounts.models import BusinessProfile
+    profile = db.query(BusinessProfile).filter(BusinessProfile.collection_id == current_user.id).first()
+    if not profile or not profile.meta:
+        return NotificationSettings()
+    
+    return NotificationSettings(
+        payment_notifications_enabled=profile.meta.get("payment_notifications_enabled", False),
+        payment_notification_channels=profile.meta.get("payment_notification_channels", ["email"]),
+    )
+
+
+@notifications_router.patch(
+    "/settings",
+    response_model=NotificationSettings,
+    summary="Update business notification settings",
+)
+def update_notification_settings(
+    data: NotificationSettings,
+    current_user: User = Depends(get_current_verified_user),
+    db: Session = Depends(get_db),
+):
+    from app.modules.accounts.models import BusinessProfile
+    profile = db.query(BusinessProfile).filter(BusinessProfile.collection_id == current_user.id).first()
+    if not profile:
+        # Create a skeleton profile if it doesn't exist? 
+        # Usually it should exist by the time they reach settings.
+        raise HTTPException(status_code=404, detail="Business profile not found")
+    
+    if profile.meta is None:
+        profile.meta = {}
+    
+    # Merge settings into meta
+    profile.meta["payment_notifications_enabled"] = data.payment_notifications_enabled
+    profile.meta["payment_notification_channels"] = data.payment_notification_channels
+    
+    # SQLAlchemy note: force refresh of JSONB if needed, though simple dict assignment usually works
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(profile, "meta")
+    
+    db.commit()
+    db.refresh(profile)
+    
+    return NotificationSettings(
+        payment_notifications_enabled=profile.meta.get("payment_notifications_enabled", False),
+        payment_notification_channels=profile.meta.get("payment_notification_channels", ["email"]),
+    )
