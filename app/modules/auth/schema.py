@@ -72,6 +72,7 @@ class Token(BaseModel):
 
 class AuthResponse(BaseModel):
     user: UserResponse
+    tokens: Optional[Token] = None
 
 class LogoutResponse(BaseModel):
     message: str = "Successfully logged out"
