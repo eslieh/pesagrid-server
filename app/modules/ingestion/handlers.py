@@ -52,6 +52,10 @@ async def handle_webhook_mpesa(envelope: MessageEnvelope) -> None:
     pass
 
 
+    logger.info(f"💳 Reconciling transaction {transaction_id}")
+    await reconcile_transaction(transaction_id)
+
+
 async def handle_payment_received(envelope: MessageEnvelope) -> None:
     """Reconcile an already-ingested transaction."""
     from app.modules.ingestion.reconciliation import reconcile_transaction
@@ -62,6 +66,58 @@ async def handle_payment_received(envelope: MessageEnvelope) -> None:
         return
     logger.info(f"💳 Reconciling transaction {transaction_id}")
     await reconcile_transaction(transaction_id)
+
+
+async def handle_bank_k_till(envelope: MessageEnvelope) -> None:
+    """Resolve collection → normalize → ingest → reconcile Bank-K Till."""
+    from app.core.dependancies import SessionLocal
+    from app.modules.accounts.models import PSPConfig
+    from app.modules.ingestion.services import IngestionService
+    from app.modules.ingestion.normalizers.bank import normalize_bank_k_till
+    
+    raw = envelope.payload.get("raw", {})
+    collection_id = envelope.payload.get("collection_id")
+    
+    if not collection_id:
+        logger.error(f"❌ Bank-K Till failed: Missing collection_id in payload")
+        return
+
+    db = SessionLocal()
+    try:
+        normalized = normalize_bank_k_till(raw)
+        service = IngestionService(db=db, collection_id=uuid.UUID(collection_id))
+        await service.ingest_normalized(normalized, psp_type="kcb")
+        logger.info(f"📥 Bank-K Till ingested for collection {collection_id}")
+    except Exception as e:
+        logger.error(f"Ingestion failed for Bank-K Till: {e}")
+    finally:
+        db.close()
+
+
+async def handle_bank_k_account(envelope: MessageEnvelope) -> None:
+    """Resolve collection → normalize → ingest → reconcile Bank-K Account."""
+    from app.core.dependancies import SessionLocal
+    from app.modules.accounts.models import PSPConfig
+    from app.modules.ingestion.services import IngestionService
+    from app.modules.ingestion.normalizers.bank import normalize_bank_k_account
+    
+    raw = envelope.payload.get("raw", {})
+    collection_id = envelope.payload.get("collection_id")
+    
+    if not collection_id:
+        logger.error(f"❌ Bank-K Account failed: Missing collection_id in payload")
+        return
+
+    db = SessionLocal()
+    try:
+        normalized = normalize_bank_k_account(raw)
+        service = IngestionService(db=db, collection_id=uuid.UUID(collection_id))
+        await service.ingest_normalized(normalized, psp_type="kcb")
+        logger.info(f"📥 Bank-K Account ingested for collection {collection_id}")
+    except Exception as e:
+        logger.error(f"Ingestion failed for Bank-K Account: {e}")
+    finally:
+        db.close()
 
 
 async def handle_transaction_match(envelope: MessageEnvelope) -> None:

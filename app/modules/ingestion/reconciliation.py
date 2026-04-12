@@ -163,19 +163,19 @@ class ReconciliationService:
             return "ALREADY_PROCESSED"
 
 
-        if not txn.account_no:
-            logger.warning(f"Reconcile: transaction {transaction_id} has no account_no — marking UNMATCHED")
+        if not txn.account_no and not txn.narration:
+            logger.warning(f"Reconcile: transaction {transaction_id} has no account_no or narration — marking UNMATCHED")
             txn.status = TransactionStatus.UNMATCHED
             self.db.commit()
             return "UNMATCHED"
 
         collection_id = txn.collection_id
-        account_no = txn.account_no
+        # Prioritize narration for matching, fallback to account_no (BillRefNumber)
+        reference = (txn.narration or txn.account_no).strip().upper()
         amount = Decimal(str(txn.amount))
 
         # 1. High-Volume Path: Try Fleet/Campaign (CollectionPoint) first
-        # This handles the majority of bulk traffic (Matatas, etc.) with minimal DB load.
-        cp = self._find_collection_point(collection_id, account_no)
+        cp = self._find_collection_point(collection_id, reference)
         if cp:
             txn.collection_point_id = cp.id
             txn.status = TransactionStatus.CATEGORIZED
@@ -187,7 +187,7 @@ class ReconciliationService:
 
 
         # 2. Invoicing Path: Try to find a specific Obligation
-        payer = self._find_payer(collection_id, account_no)
+        payer = self._find_payer(collection_id, reference)
         if payer:
             obligation = self._find_best_obligation(payer.id, amount)
             if obligation:
@@ -196,7 +196,7 @@ class ReconciliationService:
 
         # 3. No match found
         logger.warning(
-            f"Reconcile: no match for account_no='{account_no}' "
+            f"Reconcile: no match for reference='{reference}' "
             f"in collection {collection_id} — marking UNMATCHED"
         )
         txn.status = TransactionStatus.UNMATCHED

@@ -31,6 +31,8 @@ from app.modules.ingestion.handlers import (
     handle_webhook_mpesa,
     handle_payment_received,
     handle_transaction_match,
+    handle_bank_k_till,
+    handle_bank_k_account,
 )
 from app.modules.notifications.services.handlers import (
     handle_payment_matched,
@@ -87,6 +89,8 @@ class PesagridWorker:
         logger.info("🚀 Starting Pesagrid Worker...")
 
         self.consumer.register_handler(EventType.WEBHOOK_MPESA,        handle_webhook_mpesa)
+        self.consumer.register_handler(EventType.WEBHOOK_BANK_K_TILL,  handle_bank_k_till)
+        self.consumer.register_handler(EventType.WEBHOOK_BANK_K_ACCOUNT, handle_bank_k_account)
         self.consumer.register_handler(EventType.PAYMENT_RECEIVED,     handle_payment_received)
         self.consumer.register_handler(EventType.PAYMENT_MATCHED,      handle_payment_matched)
         self.consumer.register_handler(EventType.PAYMENT_PARTIAL,      handle_payment_partial)

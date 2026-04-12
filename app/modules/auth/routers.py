@@ -11,30 +11,61 @@ from app.core.config import settings
 
 auth_router = APIRouter(tags=["Authentication"])
 
-@auth_router.post("/register", response_model=UserResponse, status_code=201)
+def _set_auth_cookies(response: Response, tokens: Token):
+    """Helper to set secure tokens in cookies for web clients"""
+    response.set_cookie(
+        key=COOKIE_ACCESS_TOKEN_NAME,
+        value=tokens.access_token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        domain=settings.COOKIE_DOMAIN
+    )
+    
+    response.set_cookie(
+        key=COOKIE_REFRESH_TOKEN_NAME,
+        value=tokens.refresh_token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        domain=settings.COOKIE_DOMAIN
+    )
+
+@auth_router.post("/register", response_model=AuthResponse, status_code=201)
 async def register(
     data: RegisterRequest,
+    response: Response,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """Register new user account"""
+    """Register new user account and log them in automatically"""
     service = AuthService(db)
-    user, token = await service.register_user(data)
+    user, token, session_tokens = await service.register_user(data)
+    
+    # Set cookies for seamless onboarding
+    _set_auth_cookies(response, session_tokens)
     
     # Send verification email in background
     # background_tasks.add_task(send_verification_email, user.email, token)
     
-    return user
+    return AuthResponse(user=user, tokens=session_tokens)
 
-@auth_router.post("/verify", response_model=UserResponse)
+@auth_router.post("/verify", response_model=AuthResponse)
 async def verify_account(
     data: VerifyAccountRequest,
+    response: Response,
     db: Session = Depends(get_db)
 ):
-    """Verify user account with token"""
+    """Verify user account and refresh session tokens"""
     service = AuthService(db)
-    user = await service.verify_account(data.token)
-    return user
+    user, tokens = await service.verify_account(data.token)
+    
+    # Refresh cookies after successful verification
+    _set_auth_cookies(response, tokens)
+    
+    return AuthResponse(user=user, tokens=tokens)
 
 # new endpoint
 @auth_router.post("/resend-verification")
@@ -58,25 +89,7 @@ async def login(
     user, tokens = await service.login(data)
     
     # Set HttpOnly cookies for web clients
-    response.set_cookie(
-        key=COOKIE_ACCESS_TOKEN_NAME,
-        value=tokens.access_token,
-        httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        domain=settings.COOKIE_DOMAIN
-    )
-    
-    response.set_cookie(
-        key=COOKIE_REFRESH_TOKEN_NAME,
-        value=tokens.refresh_token,
-        httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        domain=settings.COOKIE_DOMAIN
-    )
+    _set_auth_cookies(response, tokens)
     
     return AuthResponse(
         user=user,
@@ -147,25 +160,7 @@ async def refresh(
     tokens = await service.refresh_tokens(refresh_token)
     
     # Set new cookies for web clients
-    response.set_cookie(
-        key=COOKIE_ACCESS_TOKEN_NAME,
-        value=tokens.access_token,
-        httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        domain=settings.COOKIE_DOMAIN
-    )
-    
-    response.set_cookie(
-        key=COOKIE_REFRESH_TOKEN_NAME,
-        value=tokens.refresh_token,
-        httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        domain=settings.COOKIE_DOMAIN
-    )
+    _set_auth_cookies(response, tokens)
     
     return RefreshResponse()
 

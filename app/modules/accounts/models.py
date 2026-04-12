@@ -76,7 +76,13 @@ class PSPConfig(Base):
     # MPESA: {consumer_key, consumer_secret, passkey, environment}
     # KCB / others: {api_key, ...}
     credentials   = Column(JSONB, nullable=True, default=dict)
-    # any extra PSP-specific settings: {till_number, store_number, ...}
+    
+    # ── Bank-specific routing ─────────────────────────────────────────────────
+    till_number   = Column(Text, nullable=True)               # Bank till / shortcode
+    business_key  = Column(Text, nullable=True)               # notifyBiller key / Account business key
+    account_no    = Column(Text, nullable=True)               # Target internal bank account no
+    
+    # any extra PSP-specific settings: {store_number, ...}
     meta          = Column(JSONB, nullable=True, default=dict)
     is_active     = Column(Boolean, default=True, nullable=False, index=True)
     created_by    = Column(UUID, nullable=False)

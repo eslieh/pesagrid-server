@@ -90,8 +90,12 @@ def create_psp(
     payload = {
         "collection_id": str(cfg.collection_id),
         "psp_id": str(cfg.id),
+        "collection_id": str(cfg.collection_id),
         "psp_type": cfg.psp_type.value,
         "paybill": cfg.paybill,
+        "till_number": cfg.till_number,
+        "business_key": cfg.business_key,
+        "account_no": cfg.account_no,
         "webhook_url": cfg.webhook_url,
     }
     background_tasks.add_task(publish_config_event, EventType.CONFIG_PSP_CREATED, payload)

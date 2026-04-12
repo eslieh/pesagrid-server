@@ -22,6 +22,8 @@ from app.modules.obligations.schema import (
     GlobalLedgerResponse, PayerLedgerResponse,
     # Tracker
     TrackerSummaryResponse, GroupSummaryResponse, UpcomingPaymentsResponse,
+    NotificationTemplateLibraryResponse,
+    NotificationTemplateBulkCreate
 )
 from datetime import datetime
 from app.modules.obligations.services import ObligationService
@@ -269,6 +271,22 @@ async def delete_payer(
 # ══════════════════════════════════════════════════════════════════════════════
 
 @obligations_router.post(
+    "/templates/bulk",
+    response_model=List[NotificationTemplateResponse],
+    summary="Create multiple notification templates in bulk",
+)
+async def create_templates_bulk(
+    data: NotificationTemplateBulkCreate,
+    service: ObligationService = Depends(get_service),
+):
+    """
+    Import or create multiple templates at once.
+    Commonly used for 'Import from Library' or setup wizards.
+    """
+    return await service.create_templates_bulk(data.templates)
+
+
+@obligations_router.post(
     "/templates",
     response_model=NotificationTemplateResponse,
     status_code=status.HTTP_201_CREATED,
@@ -308,6 +326,26 @@ async def list_templates(
 ):
     total, items = await service.list_templates(template_type=template_type, channel=channel, skip=skip, limit=limit)
     return NotificationTemplateListResponse(total=total, items=items)
+
+
+@obligations_router.get(
+    "/templates/library",
+    response_model=NotificationTemplateLibraryResponse,
+    summary="Fetch high-quality system template library",
+)
+async def get_template_library(
+    template_type: Optional[TemplateType]    = Query(None, alias="type"),
+    channel:       Optional[TemplateChannel] = Query(None),
+):
+    """
+    Returns a collection of professional, informative templates that
+    businesses can 'pick and modify' when creating their own.
+    
+    Grouped by category (Invoicing, Reminders, Receipts, etc.)
+    """
+    from app.modules.obligations.template_library import get_system_templates
+    items = get_system_templates(template_type=template_type, channel=channel)
+    return NotificationTemplateLibraryResponse(total=len(items), items=items)
 
 
 @obligations_router.get(

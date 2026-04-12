@@ -74,8 +74,8 @@ class AuthService:
             (User.username.ilike(identifier))
         ).first()
     
-    async def register_user(self, data: RegisterRequest) -> Tuple[User, str]:
-        """Register a new user and generate verification token"""
+    async def register_user(self, data: RegisterRequest) -> Tuple[User, str, Token]:
+        """Register a new user and generate verification token + session tokens"""
         # Check existing user — only filter by fields that are actually provided
         filters = []
         if data.email:
@@ -104,6 +104,9 @@ class AuthService:
                     self.db.commit()
                     self.db.refresh(existing)
 
+                    # Create session tokens (automatic login even if unverified)
+                    session_tokens = self._create_tokens(existing)
+
                     # Publish AUTH_WELCOME event
                     publisher = BasePublisher(service_name="auth-service")
                     await publisher.publish_event(
@@ -116,7 +119,7 @@ class AuthService:
                             "token": token
                         }
                     )
-                    return existing, token
+                    return existing, token, session_tokens
                 else:
                     raise HTTPException(400, "Email already registered")
             
@@ -141,6 +144,10 @@ class AuthService:
         # Generate verification token
         token = self._generate_verification_token(user.id)
         logger.info(f"Verification token: {token}")
+
+        # Create session tokens
+        session_tokens = self._create_tokens(user)
+
         self.db.commit()
         self.db.refresh(user)
 
@@ -157,10 +164,10 @@ class AuthService:
             }
         )
 
-        return user, token
+        return user, token, session_tokens
     
-    async def verify_account(self, token: str) -> User:
-        """Verify user account with token"""
+    async def verify_account(self, token: str) -> Tuple[User, Token]:
+        """Verify user account with token and return fresh session tokens"""
         
         auth_token = self.db.query(AuthToken).filter(
             AuthToken.hash_tokens == self._hash_token(token)
@@ -180,6 +187,10 @@ class AuthService:
         
         # Delete used token
         self.db.delete(auth_token)
+        
+        # Create fresh session tokens
+        session_tokens = self._create_tokens(user)
+
         self.db.commit()
         self.db.refresh(user)
         
@@ -190,7 +201,7 @@ class AuthService:
             payload={"user_id": str(user.id), "email": user.email}
         )
         
-        return user
+        return user, session_tokens
     
     async def login(self, data: LoginRequest) -> Tuple[User, Token]:
         """Login user and generate tokens"""

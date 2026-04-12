@@ -22,6 +22,7 @@ class NormalizedPayment:
     payer_name: Optional[str]
     raw_payload: Dict[str, Any]
     transacted_at: Optional[datetime] = None
+    narration: Optional[str] = None
 
 
 def _normalize_phone(msisdn: str) -> str:
@@ -62,6 +63,7 @@ def normalize_c2b(payload: Dict[str, Any]) -> NormalizedPayment:
         payer_name=payer_name,
         raw_payload=payload,
         transacted_at=_parse_mpesa_datetime(payload.get("TransTime")),
+        narration=str(payload.get("BillRefNumber", "")).strip(),
     )
 
 

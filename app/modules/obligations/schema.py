@@ -377,3 +377,22 @@ class NotificationTemplateResponse(BaseModel):
 class NotificationTemplateListResponse(BaseModel):
     total: int
     items: List[NotificationTemplateResponse]
+
+
+class NotificationTemplateLibraryItem(BaseModel):
+    name:          str
+    template_type: TemplateType
+    channel:       TemplateChannel
+    subject:       Optional[str]
+    body:          str
+    category:      str
+    description:   Optional[str]
+
+
+class NotificationTemplateLibraryResponse(BaseModel):
+    total: int
+    items: List[NotificationTemplateLibraryItem]
+
+
+class NotificationTemplateBulkCreate(BaseModel):
+    templates: List[NotificationTemplateCreate]
