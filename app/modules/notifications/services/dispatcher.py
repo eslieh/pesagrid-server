@@ -24,7 +24,8 @@ from app.modules.notifications.models import NotificationLog, NotifChannel, Noti
 from app.modules.notifications.services.renderer import render, wrap_in_template
 from app.modules.notifications.services.send_sms import send_sms
 from app.modules.notifications.services.send_email import send_email
-from app.modules.obligations.models import NotificationTemplate, TemplateType
+from app.modules.obligations.models import NotificationTemplate, TemplateType, TemplateChannel
+from app.modules.obligations.template_library import get_system_default
 from app.core.config import settings
 from app.core.timezone import now_nairobi
 
@@ -44,23 +45,7 @@ _EVENT_TO_TEMPLATE_TYPE = {
     "auth.password_reset": TemplateType.CUSTOM,
 }
 
-# Hardcoded fallback for collection point receipts — used when the business
-# hasn't created a COLLECTION_RECEIPT template, so toggling sms_acknowledgement
-# on works immediately without any template setup.
-_COLLECTION_POINT_FALLBACK_SMS = (
-    "Payment of {{currency}} {{amount_paid}} received for {{collection_point_name}}. "
-    "Ref: {{psp_ref}}. Thank you!"
-)
-
-_PAYMENT_MATCHED_FALLBACK_SMS = (
-    "Hi {{payer_name}}, your payment of {{currency}} {{amount_paid}} has been received and matched. "
-    "Thank you!"
-)
-
-_PAYMENT_PARTIAL_FALLBACK_SMS = (
-    "Hi {{payer_name}}, your partial payment of {{currency}} {{amount_paid}} has been received. "
-    "New balance: {{currency}} {{balance}}. Thank you!"
-)
+# No more hardcoded fallbacks here — they are now centrally managed in template_library.py
 
 
 def _build_from_email(display_name: str, domain_or_email: str, platform: bool = False) -> str:
@@ -129,12 +114,14 @@ class NotificationDispatcher:
     ) -> Tuple[Optional[str], Optional[str], Optional[uuid.UUID]]:
         """
         Look up the tenant's NotificationTemplate.
-        1. Try channel-specific default (e.g., EMAIL + is_default=True)
-        2. Try 'ALL' channel default (ALL + is_default=True)
-        3. Try any channel-specific match
-        4. Try any 'ALL' channel match
         """
         tmpl_type = _EVENT_TO_TEMPLATE_TYPE.get(event_type)
+        
+        # [REFINEMENT] Special handling for overdue reminders
+        # The obligation.due event can be an 'upcoming', 'due_today' or 'overdue' reminder.
+        if event_type == "obligation.due" and context.get("reminder_type") == "overdue":
+            tmpl_type = TemplateType.OVERDUE_NOTICE
+
         if not tmpl_type:
             return None, None, None
 
@@ -169,6 +156,13 @@ class NotificationDispatcher:
         any_all = q.filter(NotificationTemplate.channel == 'ALL').first()
         if any_all:
             return any_all.body, getattr(any_all, "subject", None), any_all.id
+
+        # 5. [NEW] System Library Fallback (Global Defaults)
+        # If the business hasn't created ANY template, we provide a high-quality global default.
+        lib_channel = TemplateChannel.SMS if channel.lower() == "sms" else TemplateChannel.EMAIL
+        system_tmpl = get_system_default(tmpl_type, lib_channel)
+        if system_tmpl:
+            return system_tmpl.body, system_tmpl.subject, None
 
         return None, None, None
 
@@ -252,18 +246,9 @@ class NotificationDispatcher:
         if phone:
             body_tpl, _, tmpl_id = self._resolve_template(collection_id, event_type, "sms")
 
-            # Fallbacks for system receipts — ensures payers always get notified
-            if not body_tpl:
-                if event_type == "payment.categorized":
-                    body_tpl = _COLLECTION_POINT_FALLBACK_SMS
-                elif event_type == "payment.matched":
-                    body_tpl = _PAYMENT_MATCHED_FALLBACK_SMS
-                elif event_type == "payment.partial":
-                    body_tpl = _PAYMENT_PARTIAL_FALLBACK_SMS
-                
-                if body_tpl:
-                    tmpl_id = None
-
+            # System defaults are now handled inside _resolve_template via Step 5.
+            # No need for matching logic here.
+            
             if not body_tpl:
                 logger.info(f"No SMS template for '{event_type}' — collection {collection_id} skipped")
                 self._log(collection_id, payer_id, NotifChannel.SMS, phone,
@@ -300,19 +285,8 @@ class NotificationDispatcher:
             # Resolve email-specific template
             body_tpl, subject, tmpl_id = self._resolve_template(collection_id, event_type, "email")
             
-            # Fallbacks for system receipts
-            if not body_tpl:
-                if event_type == "payment.matched":
-                    body_tpl = _PAYMENT_MATCHED_FALLBACK_SMS
-                elif event_type == "payment.partial":
-                    body_tpl = _PAYMENT_PARTIAL_FALLBACK_SMS
-                
-                if body_tpl:
-                    tmpl_id = None
-                    # For emails, we might want a default subject too
-                    if not subject:
-                        subject = "Payment Receipt"
-
+            # System defaults are now handled inside _resolve_template via Step 5.
+            
             if not body_tpl:
                 # ... skipped ...
                 logger.info(f"No email template for '{event_type}' — collection {collection_id} skipped")

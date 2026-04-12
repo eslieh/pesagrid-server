@@ -1198,6 +1198,37 @@ class ObligationService:
         self.db.refresh(template)
         return template
 
+    async def create_templates_bulk(self, data: List[NotificationTemplateCreate]) -> List[NotificationTemplate]:
+        """Create multiple templates in a single request. Skips existing exact matches? No, just creates."""
+        results = []
+        for t_data in data:
+            # Re-use logic for unsetting defaults
+            if t_data.is_default:
+                self.db.query(NotificationTemplate).filter(
+                    NotificationTemplate.collection_id == self.collection_id,
+                    NotificationTemplate.template_type == t_data.template_type,
+                    NotificationTemplate.channel == t_data.channel,
+                    NotificationTemplate.is_default.is_(True),
+                ).update({"is_default": False})
+
+            template = NotificationTemplate(
+                collection_id=self.collection_id,
+                name=t_data.name,
+                template_type=t_data.template_type,
+                channel=t_data.channel,
+                subject=t_data.subject,
+                body=t_data.body,
+                is_default=t_data.is_default,
+                created_by=self.current_user_id,
+            )
+            self.db.add(template)
+            results.append(template)
+        
+        self.db.commit()
+        for t in results:
+            self.db.refresh(t)
+        return results
+
     async def list_templates(
         self,
         template_type: Optional[TemplateType] = None,
