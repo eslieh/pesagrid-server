@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, field_validator
 from app.modules.obligations.models import (
@@ -256,6 +256,86 @@ class GlobalLedgerResponse(BaseModel):
     total_payers: int
     counts:       dict  # e.g. {"overdue": 1, "pending": 2, "paid_this_month": 5}
     items:        List[PayerLedgerGroup]
+
+
+# ─── Tracker / Summary Schemas (materialized-view powered) ────────────────────
+
+class PayerSummaryRow(BaseModel):
+    """
+    One row in the fast tracker board — sourced from obligations.ledger_summary
+    materialized view. No Python-level aggregation needed.
+    """
+    payer_id:          uuid.UUID
+    payer_name:        str
+    payer_phone:       Optional[str] = None
+    payer_account_no:  Optional[str] = None
+    payer_is_active:   bool = True
+    group_id:          Optional[uuid.UUID] = None
+    group_name:        Optional[str] = None
+    total_obligations: int
+    total_due:         float
+    total_paid:        float
+    total_balance:     float
+    overdue_count:     int
+    pending_count:     int
+    settled_count:     int
+    next_due_date:     Optional[datetime] = None
+    last_activity:     Optional[datetime] = None
+    # Computed by the service — "overdue" | "pending" | "settled" | "clear"
+    payer_status:      str
+
+
+class TrackerCounts(BaseModel):
+    total:   int
+    overdue: int
+    pending: int
+    settled: int
+    clear:   int
+
+
+class TrackerSummaryResponse(BaseModel):
+    """Paginated obligation tracker board — replaces the old GlobalLedgerResponse."""
+    total_payers:   int
+    total_balance:  float
+    total_due:      float
+    total_paid:     float
+    counts:         TrackerCounts
+    page:           int
+    page_size:      int
+    items:          List[PayerSummaryRow]
+
+
+class GroupSummaryResponse(BaseModel):
+    """Roll-up for a single PayerGroup — all computed by SQL, no Python loops."""
+    group_id:      uuid.UUID
+    group_name:    str
+    group_type:    GroupType
+    description:   Optional[str] = None
+    total_payers:  int
+    total_due:     float
+    total_paid:    float
+    total_balance: float
+    overdue_count: int
+    pending_count: int
+    settled_count: int
+    payers:        List[PayerSummaryRow]
+
+
+class ObligationCalendarEntry(BaseModel):
+    """One day bucket in the upcoming-payments calendar view."""
+    due_date:    date
+    total_due:   float
+    total_count: int
+    paid_count:  int
+    unpaid_count: int
+    obligations: List[ObligationResponse]
+
+
+class UpcomingPaymentsResponse(BaseModel):
+    """Date-bucketed view of the next N days of obligations."""
+    window_days:    int
+    total_upcoming: int
+    entries:        List[ObligationCalendarEntry]
 
 
 # ─── NotificationTemplate Schemas ─────────────────────────────────────────────

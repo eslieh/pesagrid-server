@@ -52,6 +52,16 @@ _COLLECTION_POINT_FALLBACK_SMS = (
     "Ref: {{psp_ref}}. Thank you!"
 )
 
+_PAYMENT_MATCHED_FALLBACK_SMS = (
+    "Hi {{payer_name}}, your payment of {{currency}} {{amount_paid}} has been received and matched. "
+    "Thank you!"
+)
+
+_PAYMENT_PARTIAL_FALLBACK_SMS = (
+    "Hi {{payer_name}}, your partial payment of {{currency}} {{amount_paid}} has been received. "
+    "New balance: {{currency}} {{balance}}. Thank you!"
+)
+
 
 def _build_from_email(display_name: str, domain_or_email: str, platform: bool = False) -> str:
     """
@@ -242,10 +252,17 @@ class NotificationDispatcher:
         if phone:
             body_tpl, _, tmpl_id = self._resolve_template(collection_id, event_type, "sms")
 
-            # Fallback for collection point receipts — works out of the box
-            if not body_tpl and event_type == "payment.categorized":
-                body_tpl = _COLLECTION_POINT_FALLBACK_SMS
-                tmpl_id = None
+            # Fallbacks for system receipts — ensures payers always get notified
+            if not body_tpl:
+                if event_type == "payment.categorized":
+                    body_tpl = _COLLECTION_POINT_FALLBACK_SMS
+                elif event_type == "payment.matched":
+                    body_tpl = _PAYMENT_MATCHED_FALLBACK_SMS
+                elif event_type == "payment.partial":
+                    body_tpl = _PAYMENT_PARTIAL_FALLBACK_SMS
+                
+                if body_tpl:
+                    tmpl_id = None
 
             if not body_tpl:
                 logger.info(f"No SMS template for '{event_type}' — collection {collection_id} skipped")
@@ -280,7 +297,22 @@ class NotificationDispatcher:
 
         # ── Email ─────────────────────────────────────────────────────────────
         if email:
+            # Resolve email-specific template
             body_tpl, subject, tmpl_id = self._resolve_template(collection_id, event_type, "email")
+            
+            # Fallbacks for system receipts
+            if not body_tpl:
+                if event_type == "payment.matched":
+                    body_tpl = _PAYMENT_MATCHED_FALLBACK_SMS
+                elif event_type == "payment.partial":
+                    body_tpl = _PAYMENT_PARTIAL_FALLBACK_SMS
+                
+                if body_tpl:
+                    tmpl_id = None
+                    # For emails, we might want a default subject too
+                    if not subject:
+                        subject = "Payment Receipt"
+
             if not body_tpl:
                 # ... skipped ...
                 logger.info(f"No email template for '{event_type}' — collection {collection_id} skipped")

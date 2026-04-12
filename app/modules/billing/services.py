@@ -98,6 +98,11 @@ class BillingService:
             balance_kes=Decimal("0.00"),
         )
         self.db.add(wallet)
+        self.db.flush()
+
+        # Load welcome credit for Starter plan
+        self._check_and_grant_welcome_credit(wallet, starter)
+
         self.db.commit()
         self.db.refresh(sub)
         self.db.refresh(wallet)
@@ -136,6 +141,12 @@ class BillingService:
                 subscription_id=sub.id,
             )
             self.db.add(wallet)
+            self.db.flush()
+        
+        # Ensure they get the welcome credit if moving to Starter
+        wallet = self._get_wallet(sub)
+        if wallet:
+            self._check_and_grant_welcome_credit(wallet, plan)
 
         self.db.commit()
         self.db.refresh(sub)
@@ -161,7 +172,7 @@ class BillingService:
             raise HTTPException(status_code=404, detail="Wallet not found for this subscription.")
         return wallet
 
-    def initiate_topup(self, amount_kes: Decimal, email: str, callback_url: Optional[str] = None) -> TopupInitResponse:
+    async def initiate_topup(self, amount_kes: Decimal, email: str, callback_url: Optional[str] = None) -> TopupInitResponse:
         """
         Create a Paystack payment session for a wallet top-up.
         Returns the checkout URL and reference.
@@ -187,7 +198,7 @@ class BillingService:
             },
         }
 
-        resp = self._paystack_post("/transaction/initialize", payload)
+        resp = await self._paystack_post("/transaction/initialize", payload)
         data = resp.get("data", {})
 
         return TopupInitResponse(
@@ -196,7 +207,7 @@ class BillingService:
             amount_kes=amount_kes,
         )
 
-    def verify_topup(self, reference: str) -> TopupVerifyResponse:
+    async def verify_topup(self, reference: str) -> TopupVerifyResponse:
         """
         Verify a Paystack payment reference and credit the wallet.
         Idempotent — re-verifying an already credited reference returns success.
@@ -221,7 +232,7 @@ class BillingService:
             )
 
         # Verify with Paystack
-        resp = self._paystack_get(f"/transaction/verify/{reference}")
+        resp = await self._paystack_get(f"/transaction/verify/{reference}")
         data = resp.get("data", {})
 
         if data.get("status") != "success":
@@ -265,19 +276,16 @@ class BillingService:
         # Trigger notification to business owner
         try:
             from app.rabbitmq import BasePublisher, EventType, Priority
-            import asyncio
             publisher = BasePublisher("billing-service")
-            asyncio.create_task(
-                publisher.publish_event(
-                    EventType.BILLING_TOPUP_SUCCESS,
-                    {
-                        "collection_id": str(self.collection_id),
-                        "amount_credited": float(amount_kes),
-                        "balance_kes": float(wallet.balance_kes),
-                        "reference": reference,
-                    },
-                    Priority.MEDIUM
-                )
+            await publisher.publish_event(
+                EventType.BILLING_TOPUP_SUCCESS,
+                {
+                    "collection_id": str(self.collection_id),
+                    "amount_credited": float(amount_kes),
+                    "balance_kes": float(wallet.balance_kes),
+                    "reference": reference,
+                },
+                Priority.MEDIUM
             )
         except Exception as exc:
             logger.debug(f"topup notification event publish failed (non-critical): {exc}")
@@ -632,37 +640,78 @@ class BillingService:
             .first()
         )
 
+    def _check_and_grant_welcome_credit(self, wallet: TenantWallet, plan: SubscriptionPlan) -> None:
+        """
+        Grant a one-time 'Welcome Credit' equal to the minimum wallet balance
+        if the tenant just subscribed to the Starter plan for the first time.
+        """
+        if plan.slug != PlanSlug.STARTER:
+            return
+
+        # Check if already granted
+        already_granted = (
+            self.db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.wallet_id == wallet.id,
+                WalletTransaction.event_type == WalletTxEvent.WELCOME_CREDIT
+            )
+            .first()
+        )
+        if already_granted:
+            return
+
+        credit_amount = plan.wallet_minimum_kes
+        if credit_amount <= 0:
+            return
+
+        new_balance = wallet.balance_kes + credit_amount
+        wallet.balance_kes = new_balance
+
+        tx = WalletTransaction(
+            wallet_id=wallet.id,
+            collection_id=self.collection_id,
+            tx_type=WalletTxType.TOPUP,
+            event_type=WalletTxEvent.WELCOME_CREDIT,
+            amount_kes=credit_amount,
+            balance_after=new_balance,
+            description="Welcome Credit (Starter Plan) — your first month is on us!",
+        )
+        self.db.add(tx)
+        logger.info(f"🎁 Granted welcome credit of {credit_amount} to tenant {self.collection_id}")
+
     # ──────────────────────────────────────────────────────────────────────────
     #  Paystack HTTP helpers
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _paystack_post(self, path: str, payload: dict) -> dict:
+    async def _paystack_post(self, path: str, payload: dict) -> dict:
         url = f"{settings.PAYSTACK_BASE_URL}{path}"
         headers = {
             "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
             "Content-Type": "application/json",
         }
         try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("status"):
-                raise HTTPException(status_code=502, detail=data.get("message", "Paystack error"))
-            return data
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, headers=headers, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+                if not data.get("status"):
+                    raise HTTPException(status_code=502, detail=data.get("message", "Paystack error"))
+                return data
         except httpx.HTTPStatusError as exc:
             logger.error(f"Paystack POST {path} failed: {exc}")
             raise HTTPException(status_code=502, detail="Payment gateway error. Please try again.")
 
-    def _paystack_get(self, path: str) -> dict:
+    async def _paystack_get(self, path: str) -> dict:
         url = f"{settings.PAYSTACK_BASE_URL}{path}"
         headers = {"Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}"}
         try:
-            resp = httpx.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("status"):
-                raise HTTPException(status_code=502, detail=data.get("message", "Paystack error"))
-            return data
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+                if not data.get("status"):
+                    raise HTTPException(status_code=502, detail=data.get("message", "Paystack error"))
+                return data
         except httpx.HTTPStatusError as exc:
             logger.error(f"Paystack GET {path} failed: {exc}")
             raise HTTPException(status_code=502, detail="Payment gateway error. Please try again.")

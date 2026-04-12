@@ -95,9 +95,65 @@ async def _notify_business(event_type: str, payload: dict) -> None:
         currency = payload.get("currency", "KES")
         payer_name = payload.get("payer_name", "Unknown")
         account_no = payload.get("account_no", "")
+        phone = payload.get("phone", "Unknown")
+        psp_ref = payload.get("psp_ref", "Unknown")
         
-        message_body = f"New payment received: {currency} {amount} from {payer_name} (Acc: {account_no}). Status: {event_type.split('.')[-1]}"
-        subject = f"Payment Received - {currency} {amount}"
+        from app.modules.notifications.services.renderer import _format_date
+        ingested_at = _format_date(payload.get("ingested_at", ""))
+        
+        sent_any = False
+        
+        if event_type == "payment.unmatched":
+            from app.core.config import settings
+            
+            subject = f"⚠️ Unmatched Payment: {currency} {amount} ({phone})"
+            message_body_html = f"""
+            <h2 style="color: #f59e0b;">Unmatched Payment Alert</h2>
+            <p>A payment was received but could not be automatically matched to an obligation or collection point.</p>
+            
+            <div style="background: #fdfdfd; border-left: 4px solid #f59e0b; padding: 16px; margin: 24px 0;">
+                <p style="margin-top: 0; font-weight: bold; font-size: 14px; color: #92400e;">Transaction Details:</p>
+                <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Amount:</td><td><b>{currency} {amount:,.2f}</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Sender:</td><td><b>{phone} ({payer_name})</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Reference Used:</td><td><b style="color: #b45309;">{account_no}</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">M-PESA Ref:</td><td><b>{psp_ref}</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Received At:</td><td><b>{ingested_at}</b></td></tr>
+                </table>
+            </div>
+            
+            <p>Please log in to your Transaction Hub to manually match this payment to the correct invoice.</p>
+            
+            <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/transactions' class='button-black'>Go to Transaction Hub</a></div>
+            """
+            message_body_sms = f"Unmatched payment alert: {currency} {amount:,.2f} received from {phone} ({payer_name}) (Acc Ref: {account_no}). Ref: {psp_ref}. Match it in your PesaGrid dashboard."
+        else:
+            from app.core.config import settings
+            description = payload.get("description", "Invoice")
+            balance = payload.get("balance", 0.0)
+            status_label = "Settled" if event_type == "payment.matched" else "Partial Payment"
+            
+            subject = f"Payment Received: {currency} {amount:,.2f} from {payer_name}"
+            message_body_html = f"""
+            <h2 style="color: #6bb800;">{status_label} Received</h2>
+            <p>A payment has been successfully matched and applied.</p>
+            
+            <div style="background: #fdfdfd; border-left: 4px solid #6bb800; padding: 16px; margin: 24px 0;">
+                <p style="margin-top: 0; font-weight: bold; font-size: 14px; color: #166534;">Payment Summary:</p>
+                <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Amount Applied:</td><td><b>{currency} {amount:,.2f}</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Internal Payer:</td><td><b>{payer_name} (Acc: {account_no})</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Purpose:</td><td><b>{description}</b></td></tr>
+                    <tr style="border-top: 1px dashed #e5e7eb;"><td style="padding: 8px 0 4px 0; color: #6b7280;">Actual Sender:</td><td style="padding: 8px 0 4px 0;"><b>{phone}</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">M-PESA Ref:</td><td><b>{psp_ref}</b></td></tr>
+                    <tr><td style="padding: 4px 0; color: #6b7280;">Source Time:</td><td><b>{ingested_at}</b></td></tr>
+                    <tr style="border-top: 1px solid #e5e7eb;"><td style="padding: 8px 0; font-weight: bold;">New Balance:</td><td style="padding: 8px 0;"><b>{currency} {balance:,.2f}</b></td></tr>
+                </table>
+            </div>
+            
+            <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/ledger' class='button-black'>View Financial Ledger</a></div>
+            """
+            message_body_sms = f"Payment: {currency} {amount:,.2f} from {phone} matched to {payer_name} ({description}). New Bal: {currency} {balance:,.2f}. Ref: {psp_ref}."
 
         if "email" in channels and profile.email:
             try:
@@ -106,17 +162,24 @@ async def _notify_business(event_type: str, payload: dict) -> None:
                 from app.core.config import settings
                 email_from = _build_from_email("PesaGrid", settings.RESEND_FROM_EMAIL or "mails.ryfty.net", platform=True)
 
-                wrapped_body = wrap_in_template(message_body, business_name="PesaGrid")
+                wrapped_body = wrap_in_template(message_body_html, business_name="PesaGrid")
                 await send_email(profile.email, subject, wrapped_body, from_email=email_from)
                 logger.info(f"📧 Sent payment notification email to business {profile.email}")
+                sent_any = True
+                
+                # Charge the business for the notification
+                await _publish_billing_event(collection_id, "email")
             except Exception as e:
                 logger.error(f"Failed to email business {profile.email}: {e}")
                 
         if "sms" in channels and profile.phone:
             try:
-                # Assuming send_sms(to, text_body)
-                await send_sms(profile.phone, message_body)
+                await send_sms(profile.phone, message_body_sms)
                 logger.info(f"📱 Sent payment notification SMS to business {profile.phone}")
+                sent_any = True
+                
+                # Charge the business for the notification
+                await _publish_billing_event(collection_id, "sms")
             except Exception as e:
                 logger.error(f"Failed to SMS business {profile.phone}: {e}")
 
@@ -124,6 +187,25 @@ async def _notify_business(event_type: str, payload: dict) -> None:
         logger.error(f"❌ Business notification failed for {event_type}: {e}")
     finally:
         db.close()
+
+
+async def _publish_billing_event(collection_id: uuid.UUID, channel: str):
+    """Publish a billing metering event for business notifications."""
+    try:
+        from app.rabbitmq import BasePublisher, EventType, Priority
+        publisher = BasePublisher("notification-handler")
+        await publisher.publish_event(
+            EventType.BILLING_NOTIFICATION_SENT,
+            {
+                "collection_id": str(collection_id),
+                "channel": channel,
+                "count": 1,
+            },
+            Priority.LOW,
+        )
+    except Exception as exc:
+        logger.debug(f"billing notification metering failed (non-critical): {exc}")
+
 
 
 async def handle_payment_matched(envelope: MessageEnvelope) -> None:

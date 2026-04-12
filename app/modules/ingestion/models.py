@@ -209,3 +209,26 @@ class Transaction(Base):
         Index("idx_transactions_collection_date_amount", "collection_id", "ingested_at", "amount"),
         {"schema": "ingestion"},
     )
+
+
+class TransactionAllocation(Base):
+    """
+    Tracks exactly how much of a single payment was applied to an obligation
+    and how much became an overflow credit to the payer's balance.
+    This ensures rollbacks are perfect and don't rely on educated guesses.
+    """
+    __tablename__ = "transaction_allocations"
+
+    id             = Column(UUID, primary_key=True, default=uuid4)
+    transaction_id = Column(UUID, ForeignKey("ingestion.transactions.id", ondelete="CASCADE"), nullable=False, index=True)
+    obligation_id  = Column(UUID, ForeignKey("obligations.obligations.id", ondelete="SET NULL"), nullable=True, index=True)
+    payer_id       = Column(UUID, ForeignKey("obligations.payers.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    amount_applied = Column(Numeric(18, 2), default=0, nullable=False)
+    amount_credited= Column(Numeric(18, 2), default=0, nullable=False)
+
+    created_at     = Column(DateTime(timezone=True), default=now_nairobi, nullable=False)
+
+    __table_args__ = (
+        {"schema": "ingestion"},
+    )
