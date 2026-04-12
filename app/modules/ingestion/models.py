@@ -173,6 +173,7 @@ class Transaction(Base):
     currency             = Column(String(3), default="KES", nullable=False)
     phone                = Column(Text, nullable=True, index=True)    # normalized 254XXXXXXXXX
     account_no           = Column(Text, nullable=True, index=True)    # BillRefNumber → reconciliation key
+    narration            = Column(Text, nullable=True, index=True)    # Bank narration / BillRefNumber backup
     payer_name           = Column(Text, nullable=True)
     raw_payload          = Column(JSONB, nullable=True)               # full original callback, immutable
     status               = Column(

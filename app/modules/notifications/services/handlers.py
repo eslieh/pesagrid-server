@@ -280,20 +280,64 @@ async def handle_config_psp_created(envelope: MessageEnvelope) -> None:
         paybill = envelope.payload.get("paybill", "Unknown")
         webhook_url = envelope.payload.get("webhook_url", "")
         
-        subject = f"Integration Instructions: {psp_type.upper()} Paybill ({paybill})"
+        # ── Bank-specific logic ────────────────────────────────────────────────
+        is_bank = psp_type.lower() in ["kcb", "bank", "custom"]
+        bank_instructions = ""
+        
+        if is_bank:
+            from app.core.config import settings
+            base_url = settings.BASE_URL
+            collection_id = envelope.payload.get("collection_id")
+            till_no = envelope.payload.get("till_number")
+            biz_key = envelope.payload.get("business_key")
+            
+            bank_instructions = """
+            <div style="background: #fdfdfd; border-left: 4px solid #000; padding: 16px; margin: 24px 0;">
+                <p style="margin-top: 0; font-weight: bold;">Bank-K Integration Instructions:</p>
+                <p>Register the following URL(s) as your Instant Payment Notification (IPN) endpoints with your bank:</p>
+            """
+            
+            if till_no:
+                till_url = f"{base_url}/api/v1/ingest/{collection_id}/bank-k/till-notification"
+                bank_instructions += f"""
+                <p><b>For Tills ({till_no}):</b></p>
+                <p style="word-break: break-all; font-family: monospace; background: #eee; padding: 8px;">{till_url}</p>
+                """
+            
+            if biz_key:
+                acc_url = f"{base_url}/api/v1/ingest/{collection_id}/bank-k/account-notification"
+                bank_instructions += f"""
+                <p><b>For Account/Business Key ({biz_key}):</b></p>
+                <p style="word-break: break-all; font-family: monospace; background: #eee; padding: 8px;">{acc_url}</p>
+                """
+            
+            bank_instructions += "</div>"
+            subject = f"Integration Instructions: Bank-K Channel"
+            html_content = f"""
+            <h2>Payment Channel Configured</h2>
+            <p>You have successfully added a new Bank-K Payment Channel to your PesaGrid account.</p>
+            {bank_instructions}
+            <p>Once registered, all payments will automatically appear in your PesaGrid dashboard.</p>
+            """
+        else:
+            # ── Generic/M-PESA path ───────────────────────────────────────────
+            subject = f"Integration Instructions: {psp_type.upper()} Paybill ({paybill})"
+            html_content = f"""
+            <h2>Payment Channel Configured</h2>
+            <p>You have successfully added a new {psp_type.upper()} Payment Channel (Paybill/Till: <strong>{paybill}</strong>) to your PesaGrid account.</p>
+            
+            <div style="background: #fdfdfd; border-left: 4px solid #000; padding: 16px; margin: 24px 0;">
+                <p style="margin-top: 0; font-weight: bold;">Integration Instructions:</p>
+                <p>Please register the following URL as your Validation and Confirmation Callback endpoints with your PSP (e.g., Safaricom Daraja):</p>
+                <p style="word-break: break-all; font-family: monospace; background: #eee; padding: 8px;">{webhook_url}</p>
+            </div>
+            
+            <p>Once registered, all payments to {paybill} will automatically appear in your PesaGrid dashboard.</p>
+            """
         
         from app.core.config import settings
         html_body = f"""
-        <h2>Payment Channel Configured</h2>
-        <p>You have successfully added a new {psp_type.upper()} Payment Channel (Paybill/Till: <strong>{paybill}</strong>) to your PesaGrid account.</p>
-        
-        <div style="background: #fdfdfd; border-left: 4px solid #000; padding: 16px; margin: 24px 0;">
-            <p style="margin-top: 0; font-weight: bold;">Integration Instructions:</p>
-            <p>Please register the following URL as your Validation and Confirmation Callback endpoints with your PSP (e.g., Safaricom Daraja):</p>
-            <p style="word-break: break-all; font-family: monospace; background: #eee; padding: 8px;">{webhook_url}</p>
-        </div>
-        
-        <p>Once registered, all payments to {paybill} will automatically appear in your PesaGrid dashboard.</p>
+        {html_content}
         <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/settings/channels' class='button-black'>Go to Dashboard</a></div>
         """
         

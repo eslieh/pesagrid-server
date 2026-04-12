@@ -13,6 +13,8 @@ class EventType(str, Enum):
     SEND_PUSH  = "notification.push.send"
     # Ingestion
     WEBHOOK_MPESA     = "webhook.mpesa"           # raw callback → worker ingests + reconciles
+    WEBHOOK_BANK_K_TILL    = "webhook.bank_k.till"     # raw Bank-K till callback
+    WEBHOOK_BANK_K_ACCOUNT = "webhook.bank_k.account"  # raw Bank-K account callback
     PAYMENT_RECEIVED  = "payment.received"        # fired after a transaction is ingested
     # Reconciliation outcomes
     PAYMENT_MATCHED   = "payment.matched"     # obligation → PAID

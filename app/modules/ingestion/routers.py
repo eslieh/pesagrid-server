@@ -118,6 +118,97 @@ async def mpesa_validate(
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
+@webhook_router.post(
+    "/{collection_id}/bank-k/till-notification",
+    summary="Bank-K (KCB) Till Notification",
+    status_code=status.HTTP_200_OK,
+)
+async def bank_k_till_callback(
+    collection_id: uuid.UUID,
+    request: Request
+):
+    """
+    KCB Till / Vooma notification callback.
+    Always returns immediate KCB-spec acknowledgement.
+    """
+    try:
+        payload: Dict[str, Any] = await request.json()
+    except Exception:
+        return {"header": {"statusCode": "1", "statusMessage": "Invalid JSON"}}
+
+    try:
+        publisher = BasePublisher(service_name="ingest-gateway")
+        await publisher.publish_event(
+            event_type=EventType.WEBHOOK_BANK_K_TILL,
+            payload={
+                "collection_id": str(collection_id),
+                "raw": payload
+            },
+            priority=Priority.HIGH,
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue Bank-K Till callback for {collection_id}: {e}")
+
+    # Immediate ACK with KCB-spec structure
+    msg_id = payload.get("header", {}).get("messageID", "0")
+    conv_id = payload.get("header", {}).get("originatorConversationID", "0")
+    
+    return {
+        "header": {
+            "messageID": msg_id,
+            "originatorConversationID": conv_id,
+            "statusCode": "0",
+            "statusMessage": "Notification received successfully"
+        },
+        "responsePayload": {
+            "transactionInfo": {
+                "transactionId": payload.get("requestPayload", {}).get("additionalData", {}).get("notificationData", {}).get("transactionID", "0")
+            }
+        }
+    }
+
+
+@webhook_router.post(
+    "/{collection_id}/bank-k/account-notification",
+    summary="Bank-K (KCB) Account Notification",
+    status_code=status.HTTP_200_OK,
+)
+async def bank_k_account_callback(
+    collection_id: uuid.UUID,
+    request: Request
+):
+    """
+    KCB Account notification callback.
+    Always returns immediate KCB-spec acknowledgement.
+    """
+    try:
+        payload: Dict[str, Any] = await request.json()
+    except Exception:
+        return {"statusCode": "1", "statusMessage": "Invalid JSON"}
+
+    try:
+        publisher = BasePublisher(service_name="ingest-gateway")
+        await publisher.publish_event(
+            event_type=EventType.WEBHOOK_BANK_K_ACCOUNT,
+            payload={
+                "collection_id": str(collection_id),
+                "raw": payload
+            },
+            priority=Priority.HIGH,
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue Bank-K Account callback for {collection_id}: {e}")
+
+    # Immediate ACK with KCB-spec structure
+    req_id = payload.get("requestId", "0")
+    
+    return {
+        "transactionID": req_id,
+        "statusCode": "0",
+        "statusMessage": "Notification received successfully"
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  TRANSACTION ENDPOINTS — authenticated (business views / manual entry)
 # ══════════════════════════════════════════════════════════════════════════════

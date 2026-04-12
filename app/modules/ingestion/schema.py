@@ -32,6 +32,7 @@ class TransactionBase(BaseModel):
     currency:     str = "KES"
     phone:        Optional[str] = None
     account_no:   Optional[str] = None
+    narration:    Optional[str] = None
     payer_name:   Optional[str] = None
 
 class ManualPaymentCreate(TransactionBase):
