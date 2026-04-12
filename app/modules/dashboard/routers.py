@@ -72,7 +72,7 @@ async def get_collection_point_metrics(
     summary="Get historical collection trends",
 )
 async def get_collection_trends(
-    interval: str = Query("day", regex="^(day|week|month|year)$"),
+    interval: str = Query("day", regex="^(hour|day|week|month|year)$"),
     collection_point_id: Optional[uuid.UUID] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),

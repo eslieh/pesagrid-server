@@ -195,7 +195,7 @@ class DashboardService:
                 logger.error(f"Cache read error: {e}")
 
         # interval must be valid for DATE_TRUNC
-        allowed_intervals = ["day", "week", "month", "year"]
+        allowed_intervals = ["hour", "day", "week", "month", "year"]
         if interval not in allowed_intervals:
             interval = "day"
 
