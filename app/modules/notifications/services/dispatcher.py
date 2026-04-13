@@ -111,6 +111,7 @@ class NotificationDispatcher:
         collection_id: uuid.UUID,
         event_type: str,
         channel: str,
+        context: dict,
     ) -> Tuple[Optional[str], Optional[str], Optional[uuid.UUID]]:
         """
         Look up the tenant's NotificationTemplate.
@@ -244,7 +245,7 @@ class NotificationDispatcher:
 
         # ── SMS ───────────────────────────────────────────────────────────────
         if phone:
-            body_tpl, _, tmpl_id = self._resolve_template(collection_id, event_type, "sms")
+            body_tpl, _, tmpl_id = self._resolve_template(collection_id, event_type, "sms", context)
 
             # System defaults are now handled inside _resolve_template via Step 5.
             # No need for matching logic here.
@@ -283,7 +284,7 @@ class NotificationDispatcher:
         # ── Email ─────────────────────────────────────────────────────────────
         if email:
             # Resolve email-specific template
-            body_tpl, subject, tmpl_id = self._resolve_template(collection_id, event_type, "email")
+            body_tpl, subject, tmpl_id = self._resolve_template(collection_id, event_type, "email", context)
             
             # System defaults are now handled inside _resolve_template via Step 5.
             

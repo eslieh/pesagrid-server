@@ -17,12 +17,14 @@ class BaseConsumer:
         self.service_name = service_name
         self.queue_name = f"{service_name}.worker"
         self.client = RabbitMQClient()
-        self.handlers: Dict[str, HandlerType] = {}
+        self.handlers: Dict[str, List[HandlerType]] = {}
 
     def register_handler(self, event_type: EventType, handler: HandlerType):
         """Register a handler for a specific event type"""
-        self.handlers[event_type.value] = handler
-        logger.info(f"Registered handler for {event_type.value}")
+        if event_type.value not in self.handlers:
+            self.handlers[event_type.value] = []
+        self.handlers[event_type.value].append(handler)
+        logger.info(f"Registered handler for {event_type.value} ({len(self.handlers[event_type.value])} total)")
 
     async def start(self):
         """Start consuming messages"""
@@ -63,12 +65,18 @@ class BaseConsumer:
                 data = json.loads(body)
                 envelope = MessageEnvelope(**data)
                 
-                # Find Handler
-                handler = self.handlers.get(envelope.event_type.value)
+                # Find Handlers
+                handlers = self.handlers.get(envelope.event_type.value, [])
                 
-                if handler:
-                    logger.info(f"Processing {envelope.event_type} event")
-                    await handler(envelope)
+                if handlers:
+                    logger.info(f"Processing {envelope.event_type} event with {len(handlers)} handler(s)")
+                    for handler in handlers:
+                        try:
+                            await handler(envelope)
+                        except Exception as h_exc:
+                            logger.error(f"Handler {handler.__name__} failed for {envelope.event_type}: {h_exc}")
+                            # We continue to next handler even if one fails
+                    
                     await message.ack()
                 else:
                     # Log warning but ack if we don't have a handler (prevent infinite loop)
