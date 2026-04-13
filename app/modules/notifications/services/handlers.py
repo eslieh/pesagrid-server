@@ -50,6 +50,7 @@ async def _dispatch(event_type: str, payload: dict) -> None:
             previous_arrears=payload.get("previous_arrears", 0.0),
             penalty=payload.get("penalty", 0.0),
             collection_point_name=payload.get("collection_point_name", ""),
+            reminder_type=payload.get("reminder_type"),
         )
 
 
