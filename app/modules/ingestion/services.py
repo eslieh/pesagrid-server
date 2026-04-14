@@ -36,6 +36,10 @@ class AccountsService:
         self.current_user_id = current_user_id
 
     def _build_webhook_url(self, psp_type: PSPType, base_url: str) -> str:
+        if psp_type == PSPType.MPESA:
+            psp_type = "c2b"
+        elif psp_type == PSPType.KCB:
+            psp_type = "bank-k"
         return f"{base_url}/api/v1/ingest/{self.collection_id}/{psp_type.value}/callback"
 
     def _get_or_404(self, psp_id: uuid.UUID) -> PSPConfig:

@@ -125,7 +125,7 @@ async def _notify_business(event_type: str, payload: dict) -> None:
             
             <p>Please log in to your Transaction Hub to manually match this payment to the correct invoice.</p>
             
-            <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/transactions' class='button-black'>Go to Transaction Hub</a></div>
+            <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/transactions?search={psp_ref}' class='button-black'>Go to Transaction Hub</a></div>
             """
             message_body_sms = f"Unmatched payment alert: {currency} {amount:,.2f} received from {phone} ({payer_name}) (Acc Ref: {account_no}). Ref: {psp_ref}. Match it in your PesaGrid dashboard."
         else:
@@ -152,7 +152,7 @@ async def _notify_business(event_type: str, payload: dict) -> None:
                 </table>
             </div>
             
-            <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/ledger' class='button-black'>View Financial Ledger</a></div>
+            <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/transactions?search={psp_ref}' class='button-black'>View The Transaction</a></div>
             """
             message_body_sms = f"Payment: {currency} {amount:,.2f} from {phone} matched to {payer_name} ({description}). New Bal: {currency} {balance:,.2f}. Ref: {psp_ref}."
 
@@ -339,7 +339,7 @@ async def handle_config_psp_created(envelope: MessageEnvelope) -> None:
         from app.core.config import settings
         html_body = f"""
         {html_content}
-        <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/settings/channels' class='button-black'>Go to Dashboard</a></div>
+        <div style='margin: 32px 0;'><a href='{settings.CLIENT_URL}/dashboard/payment-channels' class='button-black'>Go to Dashboard</a></div>
         """
         
         wrapped_body = wrap_in_template(html_body, business_name="PesaGrid")
