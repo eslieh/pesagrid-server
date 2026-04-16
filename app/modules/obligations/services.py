@@ -7,6 +7,7 @@ from sqlalchemy import func, text
 import uuid
 import logging
 import json
+from decimal import Decimal
 
 from app.core.cache import cache
 from app.modules.obligations.models import (
