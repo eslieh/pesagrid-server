@@ -13,6 +13,7 @@ from app.modules.obligations.models import (
     Obligation, RecurringConfig, ObligationStatus, RecurrenceType
 )
 from app.modules.obligations.models import Payer
+from app.modules.obligations.logic import compute_next_due, apply_credit_to_obligation
 from app.rabbitmq.publisher import BasePublisher
 from app.rabbitmq.types import EventType, Priority
 from app.core.timezone import now_nairobi, make_aware
@@ -22,38 +23,6 @@ logger = logging.getLogger(__name__)
 publisher = BasePublisher("recurring-billing-cron")
 scheduler = AsyncIOScheduler()
 
-def compute_next_due(config: RecurringConfig, from_date: datetime) -> Optional[datetime]:
-    rt = config.recurrence_type
-
-    if rt == RecurrenceType.MONTHLY:
-        import calendar
-        day = config.day_of_month or from_date.day
-        
-        _, max_days_curr = calendar.monthrange(from_date.year, from_date.month)
-        next_dt = from_date.replace(day=min(day, max_days_curr))
-        
-        if next_dt <= from_date:
-            month = from_date.month + 1
-            year = from_date.year
-            if month > 12:
-                month = 1
-                year += 1
-            _, max_days_next = calendar.monthrange(year, month)
-            next_dt = from_date.replace(year=year, month=month, day=min(day, max_days_next))
-            
-        return next_dt
-
-    elif rt == RecurrenceType.WEEKLY:
-        dow = config.day_of_week if config.day_of_week is not None else from_date.weekday()
-        days_ahead = (dow - from_date.weekday()) % 7 or 7
-        return from_date + timedelta(days=days_ahead)
-
-    elif rt == RecurrenceType.CUSTOM:
-        if config.interval_days:
-            return from_date + timedelta(days=config.interval_days)
-        return from_date + timedelta(days=30)
-
-    return None
 
 def _run_billing_cycle_sync():
     """Synchronous core of the billing cycle."""
@@ -132,16 +101,27 @@ def _run_billing_cycle_sync():
                     # 4. Move config to new obligation and update next_due_date
                     config.obligation_id = new_ob.id
                     base_due = make_aware(config.next_due_date) if config.next_due_date else now
-                    config.next_due_date = compute_next_due(config, base_due)
+                    config.next_due_date = compute_next_due(
+                        config.recurrence_type, 
+                        base_due, 
+                        config.day_of_month, 
+                        config.day_of_week, 
+                        config.interval_days
+                    )
+                    
+                    # 5. Apply any existing credit balance to the new obligation
+                    payer = db.query(Payer).filter(Payer.id == new_ob.payer_id).first()
+                    credit_used = Decimal("0")
+                    if payer:
+                        credit_used = apply_credit_to_obligation(payer, new_ob)
                     
                     db.commit()
                     processed_count += 1
                     
-                    # 5. Prepare event for publication
-                    payer = db.query(Payer).filter(Payer.id == new_ob.payer_id).first()
-                    # Only publish the notification if this is the final catch-up obligation
+                    # 6. Prepare event for publication
                     config_next_due = make_aware(config.next_due_date) if config.next_due_date else None
                     if payer and (config_next_due is None or config_next_due > now):
+
                         events_to_publish.append({
                             "event_type": EventType.OBLIGATION_CREATED,
                             "payload": {
@@ -153,12 +133,16 @@ def _run_billing_cycle_sync():
                                 "email":          payer.email or "",
                                 "account_no":     new_ob.account_no,
                                 "amount_due":     float(new_ob.amount_due),
+                                "amount_paid":    float(new_ob.amount_paid),
+                                "balance":        float(new_ob.balance),
+                                "status":         new_ob.status.value,
                                 "currency":       new_ob.currency,
                                 "due_date":       new_ob.due_date.isoformat() if new_ob.due_date else "",
                                 "description":    new_ob.description or "",
                                 "is_rollover":    True,
                                 "previous_arrears": float(arrears),
                                 "penalty":        float(penalty),
+                                "credit_used":    float(credit_used),
                             }
                         })
 

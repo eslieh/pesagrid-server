@@ -74,68 +74,11 @@ class ObligationService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payer group not found")
         return g
 
-    def _compute_next_due(self, config_data, from_date: datetime) -> Optional[datetime]:
-        """Compute next_due_date from a RecurringConfigCreate."""
-        rt = config_data.recurrence_type
-
-        if rt == RecurrenceType.MONTHLY:
-            import calendar
-            day = config_data.day_of_month or from_date.day
-            
-            _, max_days_curr = calendar.monthrange(from_date.year, from_date.month)
-            next_dt = from_date.replace(day=min(day, max_days_curr))
-            
-            if next_dt <= from_date:
-                month = from_date.month + 1
-                year = from_date.year
-                if month > 12:
-                    month = 1
-                    year += 1
-                _, max_days_next = calendar.monthrange(year, month)
-                next_dt = from_date.replace(year=year, month=month, day=min(day, max_days_next))
-                
-            return next_dt
-
-        elif rt == RecurrenceType.WEEKLY:
-            dow = config_data.day_of_week if config_data.day_of_week is not None else from_date.weekday()
-            days_ahead = (dow - from_date.weekday()) % 7 or 7
-            return from_date + timedelta(days=days_ahead)
-
-        elif rt == RecurrenceType.CUSTOM:
-            if not config_data.interval_days:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="interval_days is required for CUSTOM recurrence"
-                )
-            return from_date + timedelta(days=config_data.interval_days)
-
-        elif rt == RecurrenceType.TERM:
-            # Term billing: next_due_date managed by the scheduling engine
-            return None
-
         return None
 
-    def _apply_credit_to_obligation(self, payer: Payer, obligation: Obligation):
-        """Consume any existing payer credit to settle or partially pay a new obligation."""
-        from decimal import Decimal
-        credit = Decimal(str(payer.credit_balance or 0))
-        if credit <= 0:
-            return
 
-        needed = Decimal(str(obligation.balance))
-        usage = min(credit, needed)
-
-        obligation.amount_paid = Decimal(str(obligation.amount_paid)) + usage
-        obligation.balance = Decimal(str(obligation.amount_due)) - Decimal(str(obligation.amount_paid))
-        payer.credit_balance = credit - usage
-
-        if obligation.balance <= 0:
-            obligation.status = ObligationStatus.SETTLED
-            obligation.balance = Decimal("0")
-        elif usage > 0:
-            obligation.status = ObligationStatus.PARTIAL
-
-        logger.info(f"💳 Applied {usage} credit from Payer {payer.id} to Obligation {obligation.id}")
+    def _apply_credit_to_obligation(self, payer: Payer, obligation: Obligation) -> Decimal:
+        return apply_credit_to_obligation(payer, obligation)
 
     def get_recurring_preview(self, rt: RecurrenceType, amount: float, start_date: datetime, interval_days: int = None, day_of_month: int = None, day_of_week: int = None) -> str:
         """
@@ -374,7 +317,7 @@ class ObligationService:
         self.db.refresh(obligation)
 
         # Publish event
-        await self._publish_obligation_created(obligation, payer)
+        await self._publish_obligation_created(obligation, payer, float(credit_used))
 
         return obligation
 
@@ -456,13 +399,13 @@ class ObligationService:
             self.db.add(config)
 
         # 4. Auto-apply existing credit
-        self._apply_credit_to_obligation(payer, obligation)
+        credit_used = self._apply_credit_to_obligation(payer, obligation)
 
         self.db.commit()
         self.db.refresh(payer)
         self.db.refresh(obligation)
 
-        await self._publish_obligation_created(obligation, payer)
+        await self._publish_obligation_created(obligation, payer, float(credit_used))
         return payer, obligation
 
     async def get_payer_ledger(self, payer_id: uuid.UUID) -> dict:
@@ -1009,7 +952,7 @@ class ObligationService:
 
         return f"Due {ob.due_date.strftime('%b %d')}" if ob.due_date else "Pending"
 
-    async def _publish_obligation_created(self, obligation: Obligation, payer: Payer):
+    async def _publish_obligation_created(self, obligation: Obligation, payer: Payer, credit_used: float = 0.0):
         try:
             from app.rabbitmq.publisher import BasePublisher
             from app.rabbitmq.types import EventType, Priority
@@ -1025,9 +968,13 @@ class ObligationService:
                     "email":          payer.email or "",
                     "account_no":     obligation.account_no,
                     "amount_due":     float(obligation.amount_due),
+                    "amount_paid":    float(obligation.amount_paid),
+                    "balance":        float(obligation.balance),
                     "currency":       obligation.currency,
+                    "status":         obligation.status.value,
                     "due_date":       obligation.due_date.isoformat() if obligation.due_date else "",
                     "description":    obligation.description or "",
+                    "credit_used":    credit_used,
                 },
                 priority=Priority.MEDIUM,
             )

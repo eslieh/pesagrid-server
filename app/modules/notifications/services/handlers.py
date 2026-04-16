@@ -49,7 +49,9 @@ async def _dispatch(event_type: str, payload: dict) -> None:
             is_rollover=payload.get("is_rollover", False),
             previous_arrears=payload.get("previous_arrears", 0.0),
             penalty=payload.get("penalty", 0.0),
+            credit_used=payload.get("credit_used", 0.0),
             collection_point_name=payload.get("collection_point_name", ""),
+
             reminder_type=payload.get("reminder_type"),
         )
 
