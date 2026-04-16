@@ -110,6 +110,8 @@ class TransactionEnrichedResponse(TransactionBase):
     matched_payer:         Optional[MatchedPayerContext]         = None
     matched_obligation:    Optional[MatchedObligationContext]    = None
     collection_point:      Optional[CollectionPointContext]      = None
+    amount_credited:       float                                 = 0.0
+
 
     class Config:
         from_attributes = True

@@ -655,10 +655,13 @@ class ObligationService:
                 ls.settled_count,
                 ls.next_due_date,
                 ls.last_activity,
+                ls.credit_balance,
+
                 COUNT(*) OVER ()    AS row_count,
                 SUM(ls.total_balance) OVER () AS grand_balance,
                 SUM(ls.total_due)    OVER () AS grand_due,
                 SUM(ls.total_paid)   OVER () AS grand_paid,
+                SUM(ls.credit_balance) OVER () AS grand_credit,
                 COUNT(*) FILTER (WHERE ls.overdue_count  > 0) OVER () AS overdue_payers,
                 COUNT(*) FILTER (WHERE ls.pending_count  > 0 AND ls.overdue_count  = 0) OVER () AS pending_payers,
                 COUNT(*) FILTER (WHERE ls.settled_count  > 0 AND ls.overdue_count  = 0 AND ls.pending_count = 0) OVER () AS settled_payers,
@@ -678,6 +681,7 @@ class ObligationService:
                 "total_balance": 0.0,
                 "total_due": 0.0,
                 "total_paid": 0.0,
+                "grand_credit": 0.0,
                 "counts": {"total": 0, "overdue": 0, "pending": 0, "settled": 0, "clear": 0},
                 "page": page,
                 "page_size": page_size,
@@ -690,6 +694,7 @@ class ObligationService:
         grand_balance = float(first.grand_balance or 0)
         grand_due = float(first.grand_due or 0)
         grand_paid = float(first.grand_paid or 0)
+        grand_credit = float(first.grand_credit or 0)
         counts = {
             "total":   total_payers,
             "overdue": first.overdue_payers,
@@ -726,14 +731,17 @@ class ObligationService:
                 "settled_count":     r.settled_count,
                 "next_due_date":     r.next_due_date.isoformat() if r.next_due_date else None,
                 "last_activity":     r.last_activity.isoformat() if r.last_activity else None,
+                "credit_balance":    float(r.credit_balance or 0),
                 "payer_status":      payer_status,
             })
+
 
         result = {
             "total_payers":  total_payers,
             "total_balance": grand_balance,
             "total_due":     grand_due,
             "total_paid":    grand_paid,
+            "grand_credit":  grand_credit,
             "counts":        counts,
             "page":          page,
             "page_size":     page_size,
@@ -782,7 +790,8 @@ class ObligationService:
                 ls.pending_count,
                 ls.settled_count,
                 ls.next_due_date,
-                ls.last_activity
+                ls.last_activity,
+                ls.credit_balance
             FROM obligations.ledger_summary ls
             WHERE ls.collection_id = :cid
               AND ls.group_id = :gid
@@ -822,6 +831,7 @@ class ObligationService:
                 "settled_count":     r.settled_count,
                 "next_due_date":     r.next_due_date.isoformat() if r.next_due_date else None,
                 "last_activity":     r.last_activity.isoformat() if r.last_activity else None,
+                "credit_balance":    float(r.credit_balance or 0),
                 "payer_status":      payer_status,
             })
 
