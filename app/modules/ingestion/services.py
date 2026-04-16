@@ -116,7 +116,8 @@ class CollectionPointService:
         return self._get_or_404(cp_id)
 
     def create_collection_point(self, data: CollectionPointCreate) -> CollectionPoint:
-        account_no = data.account_no.strip().upper()
+        from app.core.utils import generate_unique_reference
+        account_no = data.account_no.strip().upper() if data.account_no else generate_unique_reference("CP")
 
         # Ensure it's not already used as a Payer account (collision with Invoicing)
         from app.modules.obligations.models import Payer
@@ -504,12 +505,13 @@ class IngestionService:
         psp_ref: Optional[str] = None,
         psp_config_id: Optional[uuid.UUID] = None,
         search: Optional[str] = None,
+        unmatched_only: bool = False,
         sort: str = "date_desc",
         skip: int = 0,
         limit: int = 50,
     ) -> Tuple[int, List[dict]]:
         """
-        Returns transactions with inline match context (payer + obligation).
+        Returns transactions with inline match context (payer + obligation + collection point).
         Uses a single JOIN query over existing FK matched_obligation_id —
         no new DB columns required.
 
@@ -518,14 +520,17 @@ class IngestionService:
           0.85  account_no match + partial amount (PARTIAL status result)
           0.70  account_no match, fallback to oldest open obligation
           None  CATEGORIZED / UNMATCHED / MANUAL
+
+        unmatched_only=True forces status filter to UNMATCHED regardless of txn_status.
         """
         from app.modules.obligations.models import Obligation, Payer
         from sqlalchemy import or_
 
         q = (
-            self.db.query(Transaction, Obligation, Payer)
+            self.db.query(Transaction, Obligation, Payer, CollectionPoint)
             .outerjoin(Obligation, Transaction.matched_obligation_id == Obligation.id)
             .outerjoin(Payer, Obligation.payer_id == Payer.id)
+            .outerjoin(CollectionPoint, Transaction.collection_point_id == CollectionPoint.id)
             .filter(Transaction.collection_id == self.collection_id)
         )
 
@@ -549,6 +554,8 @@ class IngestionService:
             q = q.filter(Transaction.psp_type == psp_type)
         if txn_status:
             q = q.filter(Transaction.status == txn_status)
+        if unmatched_only:
+            q = q.filter(Transaction.status == TransactionStatus.UNMATCHED)
         if collection_point_id:
             q = q.filter(Transaction.collection_point_id == collection_point_id)
         if start_date:
@@ -572,7 +579,7 @@ class IngestionService:
         rows = q.offset(skip).limit(limit).all()
 
         result = []
-        for txn, ob, payer in rows:
+        for txn, ob, payer, cp in rows:
             item = {
                 "id":                    txn.id,
                 "psp_type":              txn.psp_type,
@@ -593,6 +600,7 @@ class IngestionService:
                 "match_reasons":         None,
                 "matched_payer":         None,
                 "matched_obligation":    None,
+                "collection_point":      None,
             }
 
             if ob and payer:
@@ -627,6 +635,15 @@ class IngestionService:
                     "amount_due":      float(ob.amount_due),
                     "balance":         float(ob.balance),
                     "settlement_type": settlement_type,
+                }
+
+            if cp:
+                item["collection_point"] = {
+                    "collection_point_id": cp.id,
+                    "name":                cp.name,
+                    "account_no":          cp.account_no,
+                    "cp_type":             cp.cp_type.value if hasattr(cp.cp_type, "value") else cp.cp_type,
+                    "description":         cp.description,
                 }
 
             result.append(item)

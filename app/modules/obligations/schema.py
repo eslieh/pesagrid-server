@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, date
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from app.modules.obligations.models import (
     ObligationStatus, RecurrenceType,
     GroupType, TemplateChannel, TemplateType,
@@ -217,6 +217,14 @@ class ObligationResponse(BaseModel):
     updated_at:      datetime
     payer:           Optional[PayerResponse]           = None
     recurring_config: Optional[RecurringConfigResponse] = None
+
+    @model_validator(mode='after')
+    def override_status_if_overdue(self):
+        from app.core.timezone import now_nairobi, make_aware
+        if self.status in (ObligationStatus.PENDING, ObligationStatus.PARTIAL):
+            if self.due_date and make_aware(self.due_date) < now_nairobi():
+                self.status = ObligationStatus.OVERDUE
+        return self
 
 
 class ObligationListResponse(BaseModel):
