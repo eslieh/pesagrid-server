@@ -62,7 +62,9 @@ def build_context(
     is_rollover: bool = False,
     previous_arrears: float = 0.0,
     penalty: float = 0.0,
+    credit_used: float = 0.0,
     **extra,
+
 ) -> Dict[str, Any]:
     """
     Build a standard rendering context dict.
@@ -135,8 +137,30 @@ def build_context(
     else:
         ctx["rollover_block_txt"] = ""
         ctx["rollover_block_html"] = ""
+    
+    # Generate Credit Settlement Block
+    f_credit_used = f"{credit_used:,.2f}"
+    if credit_used > 0:
+        ctx["settlement_block_txt"] = (
+            f"\n--- CREDIT APPLIED ---\n"
+            f"Settled via balance: {currency} {f_credit_used}\n"
+            f"Remaining Balance: {currency} {f_balance}\n"
+            f"-----------------------\n"
+        )
+        ctx["settlement_block_html"] = f"""
+        <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 12px; padding: 16px; margin: 16px 0;">
+            <div style="color: #6d28d9; font-weight: bold; margin-bottom: 8px;">Settled via Credit</div>
+            <div style="display: flex; justify-content: space-between; margin: 4px 0; color: #7c3aed;"><span>Amount from Credit:</span> <b>{currency} {f_credit_used}</b></div>
+            <div style="display: flex; justify-content: space-between; margin: 4px 0; color: #7c3aed;"><span>Payable Balance:</span> <b>{currency} {f_balance}</b></div>
+            <div style="font-size: 13px; color: #8b5cf6; margin-top: 8px;">This invoice was automatically settled using your available credit balance.</div>
+        </div>
+        """
+    else:
+        ctx["settlement_block_txt"] = ""
+        ctx["settlement_block_html"] = ""
 
     ctx["digital_receipt"] = receipt_txt
+
     ctx["digital_receipt_html"] = receipt_html
 
     ctx.update(extra)

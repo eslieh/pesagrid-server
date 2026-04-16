@@ -266,6 +266,10 @@ class NotificationDispatcher:
                 if context.get("is_rollover") and "rollover" not in body_tpl.lower():
                     rendered += context.get("rollover_block_txt", "")
 
+                # Auto-include credit settlement details
+                if context.get("credit_used", 0) > 0 and "credit" not in body_tpl.lower():
+                    rendered += context.get("settlement_block_txt", "")
+
                 try:
                     result  = await send_sms(phone, rendered)
                     err     = result.get("error")
@@ -305,6 +309,10 @@ class NotificationDispatcher:
                 # Auto-include rollover details for obligation.created if it's a rollover
                 if context.get("is_rollover") and "rollover" not in body_tpl.lower():
                     rendered_inner += context.get("rollover_block_html", "")
+
+                # Auto-include credit settlement details
+                if context.get("credit_used", 0) > 0 and "credit" not in body_tpl.lower():
+                    rendered_inner += context.get("settlement_block_html", "")
 
                 rendered      = wrap_in_template(rendered_inner, business_name=sender_name)
                 final_subject = (
