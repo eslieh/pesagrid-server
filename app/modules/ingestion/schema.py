@@ -74,6 +74,14 @@ class MatchedObligationContext(BaseModel):
     balance:          float
     settlement_type:  str     # "full" | "partial" | "overpay"
 
+class CollectionPointContext(BaseModel):
+    """Inline collection point details for CATEGORIZED transactions."""
+    collection_point_id: uuid.UUID
+    name:                str
+    account_no:          str
+    cp_type:             str
+    description:         Optional[str] = None
+
 class TransactionEnrichedResponse(TransactionBase):
     """
     Full transaction record with inline match context.
@@ -101,6 +109,7 @@ class TransactionEnrichedResponse(TransactionBase):
     match_reasons:         Optional[List[str]]                  = None
     matched_payer:         Optional[MatchedPayerContext]         = None
     matched_obligation:    Optional[MatchedObligationContext]    = None
+    collection_point:      Optional[CollectionPointContext]      = None
 
     class Config:
         from_attributes = True
@@ -117,7 +126,7 @@ class TransactionEnrichedListResponse(BaseModel):
 
 class CollectionPointBase(BaseModel):
     name:                str            = Field(..., example="Matatu KAB-123C")
-    account_no:          str            = Field(..., example="KAB-123C")
+    account_no:          Optional[str]  = Field(None, example="KAB-123C")
     description:         Optional[str]  = None
     cp_type:             CollectionPointType = CollectionPointType.CUSTOM
     goal_amount:         Optional[float] = None

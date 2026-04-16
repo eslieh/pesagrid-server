@@ -201,10 +201,11 @@ class ObligationService:
     # ─── Payer CRUD ──────────────────────────────────────────────────────────
 
     async def create_payer(self, data: PayerCreate) -> Payer:
+        from app.core.utils import generate_unique_reference
         if data.group_id:
             self._get_group_or_404(data.group_id)  # validate group belongs to collection
 
-        account_no = data.account_no.strip().upper() if data.account_no else None
+        account_no = data.account_no.strip().upper() if data.account_no else generate_unique_reference("PG")
         
         # 1. Ensure it's not already used as a CollectionPoint (Bulk flow)
         if account_no:
@@ -381,8 +382,9 @@ class ObligationService:
         """
         Merged flow: Person + Invoice + Recurring in one transaction.
         """
+        from app.core.utils import generate_unique_reference
         # 1. Payer creation logic (re-using logic from create_payer)
-        account_no = data.account_no.strip().upper() if data.account_no else None
+        account_no = data.account_no.strip().upper() if data.account_no else generate_unique_reference("PG")
         
         # Check for existing Payer by account_no or phone if provided
         payer = None
@@ -493,10 +495,19 @@ class ObligationService:
             "credit_balance": float(payer.credit_balance),
         }
 
+    def _get_computed_status(self, ob: Obligation) -> ObligationStatus:
+        status_val = ob.status
+        if status_val in (ObligationStatus.PENDING, ObligationStatus.PARTIAL):
+            from app.core.timezone import now_nairobi, make_aware
+            if ob.due_date and make_aware(ob.due_date) < now_nairobi():
+                return ObligationStatus.OVERDUE
+        return status_val
+
     def _enrich_obligation(self, ob: Obligation) -> dict:
         """Helper to create the rich descriptive strings for the ledger."""
         desc = ""
-        if ob.status == ObligationStatus.OVERDUE:
+        computed_status = self._get_computed_status(ob)
+        if computed_status == ObligationStatus.OVERDUE:
             due_fmt = ob.due_date.strftime("%b %d") if ob.due_date else "unknown date"
             desc = f"Was due {due_fmt} — no payment received yet"
         elif ob.status == ObligationStatus.ROLLED:
@@ -527,7 +538,7 @@ class ObligationService:
             "balance": float(ob.balance),
             "currency": ob.currency,
             "due_date": ob.due_date.isoformat() if ob.due_date else None,
-            "status": ob.status.value,
+            "status": computed_status.value,
             "status_reason": ob.status_reason,
             "is_recurring": ob.is_recurring,
             "meta": ob.meta,
@@ -922,7 +933,7 @@ class ObligationService:
                     "balance":      float(o.balance),
                     "currency":     o.currency,
                     "due_date":     o.due_date.isoformat() if o.due_date else None,
-                    "status":       o.status.value,
+                    "status":       self._get_computed_status(o).value,
                     "status_reason": o.status_reason,
                     "is_recurring": o.is_recurring,
                     "meta":         o.meta,
@@ -974,15 +985,16 @@ class ObligationService:
 
     def _get_status_desc(self, ob: Obligation) -> str:
         """Rich description based on obligation status (used in payer ledger)."""
-        if ob.status == ObligationStatus.OVERDUE:
+        computed_status = self._get_computed_status(ob)
+        if computed_status == ObligationStatus.OVERDUE:
             due_fmt = ob.due_date.strftime("%b %d") if ob.due_date else "unknown"
             return f"Was due {due_fmt} — no payment received yet"
-        elif ob.status == ObligationStatus.ROLLED:
+        elif computed_status == ObligationStatus.ROLLED:
             close_fmt = ob.updated_at.strftime("%b %d")
             return f"Auto-closed {close_fmt} — replaced by current cycle above"
-        elif ob.status == ObligationStatus.PARTIAL:
+        elif computed_status == ObligationStatus.PARTIAL:
             return f"KES {ob.amount_paid:,.2f} received — KES {ob.balance:,.2f} still outstanding"
-        elif ob.status == ObligationStatus.SETTLED:
+        elif computed_status == ObligationStatus.SETTLED:
             return f"Paid in full {ob.updated_at.strftime('%b %d')}"
 
         return f"Due {ob.due_date.strftime('%b %d')}" if ob.due_date else "Pending"
