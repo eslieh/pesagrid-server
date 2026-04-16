@@ -10,8 +10,10 @@ import logging
 
 from app.modules.accounts.models import PSPConfig, PSPType
 from app.modules.ingestion.models import (
-    Transaction, TransactionStatus, CollectionPoint, CollectionPointPSP, CollectionPointType
+    Transaction, TransactionStatus, CollectionPoint, CollectionPointPSP, CollectionPointType,
+    TransactionAllocation
 )
+
 from app.modules.ingestion.normalizers.mpesa import NormalizedPayment
 from app.modules.ingestion.schema import (
     ManualPaymentCreate, CollectionPointCreate, CollectionPointUpdate,
@@ -527,10 +529,11 @@ class IngestionService:
         from sqlalchemy import or_
 
         q = (
-            self.db.query(Transaction, Obligation, Payer, CollectionPoint)
+            self.db.query(Transaction, Obligation, Payer, CollectionPoint, TransactionAllocation)
             .outerjoin(Obligation, Transaction.matched_obligation_id == Obligation.id)
             .outerjoin(Payer, Obligation.payer_id == Payer.id)
             .outerjoin(CollectionPoint, Transaction.collection_point_id == CollectionPoint.id)
+            .outerjoin(TransactionAllocation, Transaction.id == TransactionAllocation.transaction_id)
             .filter(Transaction.collection_id == self.collection_id)
         )
 
@@ -579,7 +582,7 @@ class IngestionService:
         rows = q.offset(skip).limit(limit).all()
 
         result = []
-        for txn, ob, payer, cp in rows:
+        for txn, ob, payer, cp, alloc in rows:
             item = {
                 "id":                    txn.id,
                 "psp_type":              txn.psp_type,
@@ -601,6 +604,7 @@ class IngestionService:
                 "matched_payer":         None,
                 "matched_obligation":    None,
                 "collection_point":      None,
+                "amount_credited":       float(alloc.amount_credited) if alloc else 0.0,
             }
 
             if ob and payer:

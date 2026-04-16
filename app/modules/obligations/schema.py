@@ -289,8 +289,10 @@ class PayerSummaryRow(BaseModel):
     settled_count:     int
     next_due_date:     Optional[datetime] = None
     last_activity:     Optional[datetime] = None
+    credit_balance:    float = 0
     # Computed by the service — "overdue" | "pending" | "settled" | "clear"
     payer_status:      str
+
 
 
 class TrackerCounts(BaseModel):
@@ -307,7 +309,9 @@ class TrackerSummaryResponse(BaseModel):
     total_balance:  float
     total_due:      float
     total_paid:     float
+    grand_credit:   float = 0
     counts:         TrackerCounts
+
     page:           int
     page_size:      int
     items:          List[PayerSummaryRow]
