@@ -33,6 +33,7 @@ class User(Base):
     password_hash = Column(Text, nullable=True)
     username = Column(Text, unique=True, nullable=True, index=True)
     phone = Column(Text, nullable=True, index=True)
+    google_id = Column(Text, unique=True, nullable=True, index=True)  # Google OAuth subject ID
     verified = Column(Boolean, default=False, index=True)
     auth_type = Column(SQLEnum(AuthType), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=now_nairobi, index=True)
@@ -44,6 +45,7 @@ class User(Base):
         Index('idx_users_email_verified', 'email', 'verified'),
         Index('idx_users_auth_type_verified', 'auth_type', 'verified'),
         Index('idx_users_created_at_desc', 'created_at', postgresql_using='btree'),
+        Index('idx_users_google_id', 'google_id', postgresql_using='hash'),
         {"schema": "auth"},
     )
 
@@ -108,6 +110,12 @@ class UserResponse(UserBase):
     verified: bool
     created_at: datetime
     verified_at: Optional[datetime] = None
+    google_id: Optional[str] = None
+
+
+class GoogleLinkResponse(BaseModel):
+    message: str
+    google_email: Optional[str] = None
 
 
 class AuthTokenResponse(BaseModel):

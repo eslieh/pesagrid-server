@@ -1,9 +1,10 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from .services import AuthService
 from app.core.dependancies import get_current_user, get_db
-from .models import User, UserResponse
+from .models import User, UserResponse, GoogleLinkResponse
 from .schema import AuthResponse, ChangePasswordRequest, ForgotPasswordRequest, LoginRequest, LogoutResponse, RefreshResponse, RefreshTokenRequest, RegisterRequest, ResetPasswordRequest, Token, VerifyAccountRequest, ResendVerificationRequest
 from .services import AuthService as auth_service
 from app.core.security import COOKIE_ACCESS_TOKEN_NAME, COOKIE_REFRESH_TOKEN_NAME
@@ -226,3 +227,115 @@ async def get_current_user_info(
     """Get current user information"""
     return current_user
 
+
+# ------------------------------------------------------------------ #
+# Google OAuth endpoints                                               #
+# ------------------------------------------------------------------ #
+
+@auth_router.get("/google", include_in_schema=True)
+async def google_login():
+    """
+    Initiate Google OAuth 2.0 sign-in / sign-up flow.
+    Redirects the browser to Google's consent screen.
+    After approval, Google redirects to /api/v1/auth/google/authorized.
+    """
+    service = AuthService.__new__(AuthService)  # no db needed for URL building
+    url = service.build_google_auth_url(state="login")
+    return RedirectResponse(url=url, status_code=302)
+
+
+@auth_router.get("/google/authorized", include_in_schema=True)
+async def google_authorized(
+    request: Request,
+    response: Response,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Google OAuth 2.0 callback endpoint.
+    Exchanges the authorization code for user info, upserts the user,
+    sets session cookies, and redirects to the frontend dashboard.
+    """
+    if error:
+        # User denied access or something went wrong on Google's side
+        return RedirectResponse(
+            url=f"{settings.CLIENT_URL}/auth/login?error=google_denied",
+            status_code=302
+        )
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code from Google")
+
+    # If state begins with a JWT-like string we treat it as an account-link callback
+    # (handled separately via /google/link → /google/authorized)
+    # For plain login the state is just 'login'
+    service = AuthService(db)
+
+    if state and state != "login" and len(state) > 20:
+        # Account-linking callback: extract user from the state JWT
+        from app.core.security import decode_token
+        payload = decode_token(state)
+        if not payload or payload.get("type") != "access":
+            return RedirectResponse(
+                url=f"{settings.CLIENT_URL}/auth/login?error=invalid_state",
+                status_code=302
+            )
+        user_id = payload.get("sub")
+        result = await service.link_google_to_account(user_id, code)
+        # Redirect to profile/settings page after successful link
+        return RedirectResponse(
+            url=f"{settings.CLIENT_URL}/dashboard/settings?google_linked=true",
+            status_code=302
+        )
+
+    # Standard login / sign-up
+    user, tokens, is_new_user = await service.handle_google_callback(code=code, state=state or "login")
+
+    # Build redirect response and embed session cookies
+    # Redirect to onboarding if they are a brand new user, otherwise dashboard
+    redirect_dest = f"{settings.CLIENT_URL}/onboarding" if is_new_user else f"{settings.CLIENT_URL}/dashboard"
+    
+    redirect = RedirectResponse(
+        url=redirect_dest,
+        status_code=302,
+    )
+    redirect.set_cookie(
+        key=COOKIE_ACCESS_TOKEN_NAME,
+        value=tokens.access_token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        domain=settings.COOKIE_DOMAIN,
+    )
+    redirect.set_cookie(
+        key=COOKIE_REFRESH_TOKEN_NAME,
+        value=tokens.refresh_token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        domain=settings.COOKIE_DOMAIN,
+    )
+    return redirect
+
+
+@auth_router.get("/google/link", response_model=None)
+async def google_link(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Initiate Google account-linking for an already authenticated user.
+    Passes the user's access token as OAuth `state` so the callback
+    can identify which account to link.
+    """
+    from app.core.security import create_access_token
+    # Create a short-lived token to use as OAuth state
+    link_state = create_access_token(
+        data={"sub": str(current_user.id), "email": current_user.email, "type": "access"}
+    )
+    service = AuthService.__new__(AuthService)
+    url = service.build_google_auth_url(state=link_state)
+    return RedirectResponse(url=url, status_code=302)
