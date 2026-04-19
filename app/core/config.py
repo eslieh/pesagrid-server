@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     PAYSTACK_PUBLIC_KEY:  str = os.getenv("PAYSTACK_PUBLIC_KEY", "")
     PAYSTACK_BASE_URL:    str = "https://api.paystack.co"
 
+    # Google OAuth
+    GOOGLE_AUTH_CLIENT_ID:     str = os.getenv("GOOGLE_AUTH_CLIENT_ID", "")
+    GOOGLE_AUTH_CLIENT_SECRET: str = os.getenv("GOOGLE_AUTH_CLIENT_SECRET", "")
+
+    @property
+    def GOOGLE_REDIRECT_URI(self) -> str:
+        """Canonical redirect URI registered in Google Cloud Console"""
+        return f"{self.BASE_URL}/api/v1/auth/google/authorized"
+
     # Cookie Configuration
     COOKIE_DOMAIN: Optional[str] = None  # None for same-origin
     COOKIE_SECURE: bool = True  # Require HTTPS but of for now

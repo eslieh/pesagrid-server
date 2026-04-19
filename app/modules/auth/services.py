@@ -9,6 +9,10 @@ import secrets
 import hashlib
 import time
 import os
+import base64
+import json
+import httpx
+from urllib.parse import urlencode
 from dotenv import load_dotenv
 load_dotenv()
 import logging
@@ -458,4 +462,166 @@ class AuthService:
         )
         self.db.add(event)
 
+    # ------------------------------------------------------------------ #
+    # Google OAuth helpers                                                 #
+    # ------------------------------------------------------------------ #
 
+    GOOGLE_AUTH_URL  = "https://accounts.google.com/o/oauth2/v2/auth"
+    GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+    GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+    def build_google_auth_url(self, state: str) -> str:
+        """
+        Build the Google OAuth 2.0 consent-page URL.
+        `state` should be 'login' for new sign-ins, or a JWT for account linking.
+        """
+        params = {
+            "client_id": settings.GOOGLE_AUTH_CLIENT_ID,
+            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "access_type": "offline",
+            "prompt": "select_account",
+            "state": state,
+        }
+        return f"{self.GOOGLE_AUTH_URL}?{urlencode(params)}"
+
+    async def _exchange_google_code(self, code: str) -> dict:
+        """Exchange authorization code for Google tokens and return decoded user info."""
+        async with httpx.AsyncClient() as client:
+            token_resp = await client.post(
+                self.GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_AUTH_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_AUTH_CLIENT_SECRET,
+                    "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15.0,
+            )
+
+        if token_resp.status_code != 200:
+            logger.error("Google token exchange failed: %s", token_resp.text)
+            raise HTTPException(400, "Google authentication failed — could not exchange code")
+
+        token_data = token_resp.json()
+        id_token_raw = token_data.get("id_token")
+        if not id_token_raw:
+            raise HTTPException(400, "Google did not return an id_token")
+
+        # Decode the JWT payload without signature verification
+        # (Google already verified it; we trust the HTTPS response)
+        try:
+            payload_b64 = id_token_raw.split(".")[1]
+            # Add padding if necessary
+            payload_b64 += "=" * (-len(payload_b64) % 4)
+            google_user = json.loads(base64.urlsafe_b64decode(payload_b64))
+        except Exception as exc:
+            logger.exception("Failed to decode Google id_token")
+            raise HTTPException(400, "Invalid id_token from Google")
+
+        return google_user  # keys: sub, email, name, picture, email_verified, ...
+
+    async def handle_google_callback(
+        self, code: str, state: str
+    ) -> Tuple["User", Token, bool]:
+        """
+        Handle the OAuth callback for sign-in / sign-up.
+        - Exchanges `code` for Google user info.
+        - Upserts the user (creates if new, logs in if existing).
+        - Returns the user, session tokens, and a boolean indicating if the user is new.
+        """
+        google_user = await self._exchange_google_code(code)
+
+        google_id   = google_user.get("sub")
+        email       = google_user.get("email")
+        name        = google_user.get("name", "")
+        verified_ok = google_user.get("email_verified", False)
+
+        if not google_id or not email:
+            raise HTTPException(400, "Incomplete user info returned from Google")
+
+        # 1. Look up by google_id first (fastest path)
+        user = self.db.query(User).filter(User.google_id == google_id).first()
+        is_new_user = False
+
+        if not user:
+            # 2. Look up by email — might be an existing email/password account
+            user = self.db.query(User).filter(User.email == email).first()
+            if user:
+                # Attach google_id to existing account and switch auth_type
+                user.google_id = google_id
+                if not user.verified and verified_ok:
+                    user.verified = True
+                    user.verified_at = now_nairobi()
+                self.db.flush()
+            else:
+                # 3. Brand-new user — create account
+                is_new_user = True
+                user = User(
+                    email=email,
+                    username=None,
+                    phone=None,
+                    password_hash=None,  # No password for Google users
+                    google_id=google_id,
+                    auth_type=AuthType.GOOGLE,
+                    verified=bool(verified_ok),
+                    verified_at=now_nairobi() if verified_ok else None,
+                )
+                self.db.add(user)
+                self.db.flush()
+
+                # Publish welcome event for brand-new Google users
+                publisher = BasePublisher(service_name="auth-service")
+                await publisher.publish_event(
+                    event_type=EventType.AUTH_WELCOME,
+                    payload={
+                        "user_id": str(user.id),
+                        "email": user.email,
+                        "phone": user.phone,
+                        "auth_type": user.auth_type.value,
+                        "token": None,  # No OTP needed for Google-verified accounts
+                    }
+                )
+
+        tokens = self._create_tokens(user)
+        self._log_event("google_login", user.id)
+        self.db.commit()
+        self.db.refresh(user)
+
+        return user, tokens, is_new_user
+
+    async def link_google_to_account(
+        self, user_id: uuid.UUID, code: str
+    ) -> dict:
+        """
+        Link a Google account to an already-authenticated user.
+        Returns the Google email that was linked.
+        """
+        google_user = await self._exchange_google_code(code)
+
+        google_id = google_user.get("sub")
+        google_email = google_user.get("email")
+
+        if not google_id:
+            raise HTTPException(400, "Could not retrieve Google account info")
+
+        # Check if this google_id is already linked to another account
+        existing = self.db.query(User).filter(
+            User.google_id == google_id,
+            User.id != user_id
+        ).first()
+        if existing:
+            raise HTTPException(409, "This Google account is already linked to another user")
+
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(404, "User not found")
+
+        user.google_id = google_id
+        self._log_event("google_linked", user_id)
+        self.db.commit()
+
+        return {"google_email": google_email}
