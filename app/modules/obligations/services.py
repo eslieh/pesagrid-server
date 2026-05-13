@@ -26,7 +26,7 @@ from app.modules.obligations.schema import (
 )
 from app.rabbitmq import BasePublisher, EventType, Priority
 from app.core.timezone import now_nairobi
-
+from app.modules.obligations.logic import apply_credit_to_obligation
 logger = logging.getLogger(__name__)
 
 
@@ -312,7 +312,7 @@ class ObligationService:
             self.db.add(config)
 
         # 4. Auto-apply existing credit
-        self._apply_credit_to_obligation(payer, obligation)
+        credit_used = self._apply_credit_to_obligation(payer, obligation)
 
         self.db.commit()
         self.db.refresh(obligation)
