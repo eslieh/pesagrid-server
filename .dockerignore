@@ -9,3 +9,4 @@ venv/
 *.bak
 *.log
 .DS_Store
+versions/
